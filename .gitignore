@@ -14,3 +14,9 @@ assets/generated/
 
 .DS_Store
 Thumbs.db
+
+# Scratch files from local tooling
+_seg*.txt
+_prog*.txt
+_retry*.txt
+_check*.txt
