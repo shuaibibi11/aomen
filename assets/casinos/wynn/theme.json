@@ -1,0 +1,36 @@
+{
+  "casinoId": "wynn",
+  "displayName": {
+    "zh-Hant": "永利（仿真）",
+    "en": "Wynn Training Theme"
+  },
+  "disclaimer": "仿真训练主题，非官方授权",
+  "mark": "W",
+  "markLabel": "WN",
+  "tokens": {
+    "felt": "#0F3D2E",
+    "feltShade": "#0A2F24",
+    "rail": "#4A2C14",
+    "railEdge": "#B8860B",
+    "accent": "#5C1A1A",
+    "gold": "#B8860B",
+    "cardBack": "#5C1A1A"
+  },
+  "patterns": {
+    "cardBack": "petal",
+    "chipCenter": "WN",
+    "chipEdge": "wide-gold",
+    "scoreStyle": "wood",
+    "monitorStyle": "gold-thin",
+    "plaqueStyle": "wood-gold"
+  },
+  "dealerStyleNote": "黑金马甲 · 酒红领饰 · 圆角金名牌",
+  "denominations": [
+    100,
+    500,
+    1000,
+    5000,
+    10000
+  ],
+  "previewHtml": "docs/design-preview/casinos/wynn.html"
+}

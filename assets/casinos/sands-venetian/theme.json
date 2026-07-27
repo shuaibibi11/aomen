@@ -1,0 +1,36 @@
+{
+  "casinoId": "sands-venetian",
+  "displayName": {
+    "zh-Hant": "金沙·威尼斯人（仿真）",
+    "en": "Sands Venetian Training Theme"
+  },
+  "disclaimer": "仿真训练主题，非官方授权",
+  "mark": "V",
+  "markLabel": "SV",
+  "tokens": {
+    "felt": "#0D5C45",
+    "feltShade": "#0A4A38",
+    "rail": "#E8E4DC",
+    "railEdge": "#C4A35A",
+    "accent": "#1A4A7A",
+    "gold": "#C4A35A",
+    "cardBack": "#123A66"
+  },
+  "patterns": {
+    "cardBack": "arch",
+    "chipCenter": "SV-T",
+    "chipEdge": "fine",
+    "scoreStyle": "stone",
+    "monitorStyle": "gold-wide",
+    "plaqueStyle": "gold-rect"
+  },
+  "dealerStyleNote": "白衫 · 金棕背心 · 金名牌",
+  "denominations": [
+    100,
+    500,
+    1000,
+    5000,
+    10000
+  ],
+  "previewHtml": "docs/design-preview/casinos/sands-venetian.html"
+}

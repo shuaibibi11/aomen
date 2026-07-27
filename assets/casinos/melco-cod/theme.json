@@ -1,0 +1,36 @@
+{
+  "casinoId": "melco-cod",
+  "displayName": {
+    "zh-Hant": "新濠天地（仿真）",
+    "en": "Melco COD Training Theme"
+  },
+  "disclaimer": "仿真训练主题，非官方授权",
+  "mark": "M",
+  "markLabel": "MC",
+  "tokens": {
+    "felt": "#2A1840",
+    "feltShade": "#1A0F2A",
+    "rail": "#111111",
+    "railEdge": "#A61B4A",
+    "accent": "#A61B4A",
+    "gold": "#2EE6D6",
+    "cardBack": "#120818"
+  },
+  "patterns": {
+    "cardBack": "diamond",
+    "chipCenter": "MC",
+    "chipEdge": "bevel",
+    "scoreStyle": "neon",
+    "monitorStyle": "neon",
+    "plaqueStyle": "neon"
+  },
+  "dealerStyleNote": "黑衫 · 品红织带 · 短马甲",
+  "denominations": [
+    100,
+    500,
+    1000,
+    5000,
+    10000
+  ],
+  "previewHtml": "docs/design-preview/casinos/melco-cod.html"
+}

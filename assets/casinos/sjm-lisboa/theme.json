@@ -1,0 +1,36 @@
+{
+  "casinoId": "sjm-lisboa",
+  "displayName": {
+    "zh-Hant": "澳博·葡京意象（仿真）",
+    "en": "SJM Lisboa-inspired Theme"
+  },
+  "disclaimer": "仿真训练主题，非官方授权",
+  "mark": "S",
+  "markLabel": "SJ",
+  "tokens": {
+    "felt": "#0A4A32",
+    "feltShade": "#063524",
+    "rail": "#6B2B1F",
+    "railEdge": "#D4A017",
+    "accent": "#9B1B1B",
+    "gold": "#D4A017",
+    "cardBack": "#9B1B1B"
+  },
+  "patterns": {
+    "cardBack": "lotus",
+    "chipCenter": "SJ",
+    "chipEdge": "copper",
+    "scoreStyle": "classic-cn",
+    "monitorStyle": "copper",
+    "plaqueStyle": "red-gold"
+  },
+  "dealerStyleNote": "红黑马甲 · 铜名牌",
+  "denominations": [
+    100,
+    500,
+    1000,
+    5000,
+    10000
+  ],
+  "previewHtml": "docs/design-preview/casinos/sjm-lisboa.html"
+}

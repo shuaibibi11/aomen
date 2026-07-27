@@ -1,0 +1,36 @@
+{
+  "casinoId": "galaxy",
+  "displayName": {
+    "zh-Hant": "银河（仿真）",
+    "en": "Galaxy Training Theme"
+  },
+  "disclaimer": "仿真训练主题，非官方授权",
+  "mark": "G",
+  "markLabel": "GX",
+  "tokens": {
+    "felt": "#123A5C",
+    "feltShade": "#0B2A44",
+    "rail": "#8A9AAB",
+    "railEdge": "#D0D7E0",
+    "accent": "#0B1E3A",
+    "gold": "#B8C4D4",
+    "cardBack": "#0B1E3A"
+  },
+  "patterns": {
+    "cardBack": "orbit",
+    "chipCenter": "GX",
+    "chipEdge": "double-metal",
+    "scoreStyle": "hud",
+    "monitorStyle": "slim",
+    "plaqueStyle": "capsule"
+  },
+  "dealerStyleNote": "深灰西装 · 银领结 · 冷光名牌",
+  "denominations": [
+    100,
+    500,
+    1000,
+    5000,
+    10000
+  ],
+  "previewHtml": "docs/design-preview/casinos/galaxy.html"
+}

@@ -1,0 +1,36 @@
+{
+  "casinoId": "mgm",
+  "displayName": {
+    "zh-Hant": "美高梅（仿真）",
+    "en": "MGM Training Theme"
+  },
+  "disclaimer": "仿真训练主题，非官方授权",
+  "mark": "M",
+  "markLabel": "MG",
+  "tokens": {
+    "felt": "#14302A",
+    "feltShade": "#0C1E1A",
+    "rail": "#1C1C1C",
+    "railEdge": "#D4AF37",
+    "accent": "#1C1C1C",
+    "gold": "#D4AF37",
+    "cardBack": "#0A0A0A"
+  },
+  "patterns": {
+    "cardBack": "lion-line",
+    "chipCenter": "MG",
+    "chipEdge": "square",
+    "scoreStyle": "gallery",
+    "monitorStyle": "frame",
+    "plaqueStyle": "vertical"
+  },
+  "dealerStyleNote": "全黑制服 · 金扣 · 极简名牌",
+  "denominations": [
+    100,
+    500,
+    1000,
+    5000,
+    10000
+  ],
+  "previewHtml": "docs/design-preview/casinos/mgm.html"
+}
