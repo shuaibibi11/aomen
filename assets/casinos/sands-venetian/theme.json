@@ -1,41 +1,66 @@
 {
   "casinoId": "sands-venetian",
-  "displayName": "金沙 · 威尼斯人（仿真训练主题）",
+  "displayName": "金沙 · 威尼斯人（仿真訓練主題）",
   "displayNameEn": "Sands Venetian - Training Simulation Theme",
-  "disclaimer": "訓練仿真素材，非官方授權，品牌可識別但非 1:1 還原",
+  "disclaimer": "仿真訓練主題，非官方授權；訓練幣結算",
   "palette": {
     "feltMain": "#0E6045",
-    "feltShadow": "#083A2A",
-    "rail": "#E9E3D6",
-    "railDark": "#B9A47A",
+    "feltMid": "#0B5039",
+    "feltShadow": "#073728",
+    "rail": "#EDE7DA",
+    "railDark": "#A8906A",
     "accent": "#1A4A7A",
     "gold": "#C9A44C",
-    "lineColor": "#F2EAD3",
+    "lineColor": "#F5EEDC",
     "tieBand": "#C9A44C",
     "cardBack": "#123A66"
   },
   "materials": {
-    "feltPattern": "damask",
+    "feltWeave": "damask",
     "railStyle": "marble",
-    "cardPattern": "arch",
-    "chipEdge": "fine-teeth",
-    "chipRings": [
-      "#1A4A7A",
-      "#C9A44C",
-      "#0E3358"
-    ],
+    "borderOrnament": "arcade",
+    "medallion": "doge-arch",
+    "cardEngrave": "arch",
+    "chipMould": "fine-teeth",
+    "chipInserts": 8,
     "boardStyle": "stone",
-    "monitorStyle": "gold-wide",
-    "plaqueStyle": "brass-plate"
+    "monitorStyle": "gilt-wide",
+    "plaqueStyle": "brass-plate",
+    "labelFont": "Georgia,'Times New Roman',serif"
   },
-  "identity": {
-    "monogram": "V",
-    "chipMonogram": "SV"
-  },
-  "tableLayout": {
-    "shape": "kidney",
-    "massSeats": 7,
-    "vipSeats": 5,
+  "tableRules": {
+    "currency": "HKD",
+    "massLimits": {
+      "min": 1000,
+      "max": 100000
+    },
+    "vipLimits": {
+      "min": 20000,
+      "max": 2000000
+    },
+    "commission": true,
+    "tiePayout": "8:1",
+    "sideBets": [
+      "Player Pair 11:1",
+      "Banker Pair 11:1"
+    ],
+    "smartTable": true,
+    "massSeatLabels": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "vipSeatLabels": [
+      1,
+      2,
+      3,
+      5,
+      6
+    ],
     "bigTableSeatLabels": [
       1,
       2,
@@ -51,30 +76,8 @@
       12,
       14,
       15
-    ],
-    "betOrderFromGuest": [
-      "player",
-      "banker",
-      "tie"
-    ],
-    "commissionBoxes": true,
-    "smartTable": true
+    ]
   },
-  "limitsExample": {
-    "currency": "HKD",
-    "mass": {
-      "min": 1000,
-      "max": 100000
-    },
-    "vip": {
-      "min": 20000,
-      "max": 2000000
-    }
-  },
-  "sideBets": [
-    "Player Pair 11:1",
-    "Banker Pair 11:1"
-  ],
   "chipDenominations": [
     100,
     500,
@@ -82,5 +85,13 @@
     5000,
     10000
   ],
-  "dealerUniform": "白襯衫 · 金棕背心 · 金色名牌 · 白手套"
+  "dealerUniform": {
+    "palette": [
+      "#FBFAF6",
+      "#8A6A34",
+      "#C9A44C",
+      "#1A4A7A"
+    ],
+    "note": "白襯衫 · 金棕背心 · 金色名牌 · 白手套"
+  }
 }

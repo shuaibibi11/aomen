@@ -2,40 +2,65 @@
   "casinoId": "mgm",
   "displayName": "美高梅（仿真訓練主題）",
   "displayNameEn": "MGM - Training Simulation Theme",
-  "disclaimer": "訓練仿真素材，非官方授權，品牌可識別但非 1:1 還原",
+  "disclaimer": "仿真訓練主題，非官方授權；訓練幣結算",
   "palette": {
     "feltMain": "#15332C",
-    "feltShadow": "#0B1F1A",
-    "rail": "#1E1E1E",
-    "railDark": "#0A0A0A",
+    "feltMid": "#112A24",
+    "feltShadow": "#0A1E19",
+    "rail": "#242424",
+    "railDark": "#080808",
     "accent": "#1C1C1C",
     "gold": "#D4AF37",
-    "lineColor": "#E8E2CF",
+    "lineColor": "#EDE7D2",
     "tieBand": "#D4AF37",
     "cardBack": "#0A0A0A"
   },
   "materials": {
-    "feltPattern": "minimal",
+    "feltWeave": "minimal",
     "railStyle": "matte-black",
-    "cardPattern": "feline-line",
-    "chipEdge": "square-edge",
-    "chipRings": [
-      "#1C1C1C",
-      "#D4AF37",
-      "#2E2E2E"
-    ],
+    "borderOrnament": "single-rule",
+    "medallion": "feline-line",
+    "cardEngrave": "feline",
+    "chipMould": "square-edge",
+    "chipInserts": 4,
     "boardStyle": "gallery",
     "monitorStyle": "art-frame",
-    "plaqueStyle": "vertical-black"
+    "plaqueStyle": "vertical-black",
+    "labelFont": "'Helvetica Neue',Arial,'Segoe UI',sans-serif"
   },
-  "identity": {
-    "monogram": "M",
-    "chipMonogram": "MG"
-  },
-  "tableLayout": {
-    "shape": "kidney",
-    "massSeats": 7,
-    "vipSeats": 5,
+  "tableRules": {
+    "currency": "HKD",
+    "massLimits": {
+      "min": 500,
+      "max": 50000
+    },
+    "vipLimits": {
+      "min": 20000,
+      "max": 1000000
+    },
+    "commission": true,
+    "tiePayout": "8:1",
+    "sideBets": [
+      "Player Pair 11:1",
+      "Banker Pair 11:1"
+    ],
+    "smartTable": true,
+    "massSeatLabels": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "vipSeatLabels": [
+      1,
+      2,
+      3,
+      5,
+      6
+    ],
     "bigTableSeatLabels": [
       1,
       2,
@@ -51,30 +76,8 @@
       12,
       14,
       15
-    ],
-    "betOrderFromGuest": [
-      "player",
-      "banker",
-      "tie"
-    ],
-    "commissionBoxes": true,
-    "smartTable": true
+    ]
   },
-  "limitsExample": {
-    "currency": "HKD",
-    "mass": {
-      "min": 500,
-      "max": 50000
-    },
-    "vip": {
-      "min": 20000,
-      "max": 1000000
-    }
-  },
-  "sideBets": [
-    "Player Pair 11:1",
-    "Banker Pair 11:1"
-  ],
   "chipDenominations": [
     100,
     500,
@@ -82,5 +85,13 @@
     5000,
     10000
   ],
-  "dealerUniform": "全黑制服 · 金釦 · 極簡名牌"
+  "dealerUniform": {
+    "palette": [
+      "#101010",
+      "#D4AF37",
+      "#2A2A2A",
+      "#EDE7D2"
+    ],
+    "note": "全黑制服 · 金釦 · 極簡名牌"
+  }
 }

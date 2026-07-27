@@ -2,40 +2,65 @@
   "casinoId": "sjm-lisboa",
   "displayName": "澳博 · 葡京意象（仿真訓練主題）",
   "displayNameEn": "SJM Lisboa-inspired - Training Simulation Theme",
-  "disclaimer": "訓練仿真素材，非官方授權，品牌可識別但非 1:1 還原",
+  "disclaimer": "仿真訓練主題，非官方授權；訓練幣結算",
   "palette": {
     "feltMain": "#0B4E35",
+    "feltMid": "#09402C",
     "feltShadow": "#063324",
-    "rail": "#7A3020",
-    "railDark": "#4A1C10",
+    "rail": "#8A3823",
+    "railDark": "#42180E",
     "accent": "#9B1B1B",
     "gold": "#D4A017",
-    "lineColor": "#F0E2BE",
+    "lineColor": "#F6E8C4",
     "tieBand": "#D4A017",
     "cardBack": "#9B1B1B"
   },
   "materials": {
-    "feltPattern": "lotus",
+    "feltWeave": "lotus",
     "railStyle": "rosewood-brass",
-    "cardPattern": "lotus",
-    "chipEdge": "copper-teeth",
-    "chipRings": [
-      "#9B1B1B",
-      "#D4A017",
-      "#0B4E35"
-    ],
+    "borderOrnament": "keyfret",
+    "medallion": "lotus-seal",
+    "cardEngrave": "lotus",
+    "chipMould": "copper-teeth",
+    "chipInserts": 8,
     "boardStyle": "classic-cn",
     "monitorStyle": "copper-heavy",
-    "plaqueStyle": "red-gold"
+    "plaqueStyle": "red-gold",
+    "labelFont": "'KaiTi','STKaiti',Georgia,serif"
   },
-  "identity": {
-    "monogram": "S",
-    "chipMonogram": "SJ"
-  },
-  "tableLayout": {
-    "shape": "kidney",
-    "massSeats": 7,
-    "vipSeats": 5,
+  "tableRules": {
+    "currency": "HKD",
+    "massLimits": {
+      "min": 200,
+      "max": 30000
+    },
+    "vipLimits": {
+      "min": 10000,
+      "max": 1000000
+    },
+    "commission": true,
+    "tiePayout": "8:1",
+    "sideBets": [
+      "Player Pair 11:1",
+      "Banker Pair 11:1"
+    ],
+    "smartTable": false,
+    "massSeatLabels": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "vipSeatLabels": [
+      1,
+      2,
+      3,
+      5,
+      6
+    ],
     "bigTableSeatLabels": [
       1,
       2,
@@ -51,30 +76,8 @@
       12,
       14,
       15
-    ],
-    "betOrderFromGuest": [
-      "player",
-      "banker",
-      "tie"
-    ],
-    "commissionBoxes": true,
-    "smartTable": false
+    ]
   },
-  "limitsExample": {
-    "currency": "HKD",
-    "mass": {
-      "min": 200,
-      "max": 30000
-    },
-    "vip": {
-      "min": 10000,
-      "max": 1000000
-    }
-  },
-  "sideBets": [
-    "Player Pair 11:1",
-    "Banker Pair 11:1"
-  ],
   "chipDenominations": [
     100,
     500,
@@ -82,5 +85,13 @@
     5000,
     10000
   ],
-  "dealerUniform": "紅黑馬甲 · 銅色名牌"
+  "dealerUniform": {
+    "palette": [
+      "#7A1414",
+      "#181818",
+      "#D4A017",
+      "#F6E8C4"
+    ],
+    "note": "紅黑馬甲 · 銅色名牌"
+  }
 }

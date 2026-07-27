@@ -2,40 +2,66 @@
   "casinoId": "melco-cod",
   "displayName": "新濠天地（仿真訓練主題）",
   "displayNameEn": "Melco City of Dreams - Training Simulation Theme",
-  "disclaimer": "訓練仿真素材，非官方授權，品牌可識別但非 1:1 還原",
+  "disclaimer": "仿真訓練主題，非官方授權；訓練幣結算",
   "palette": {
     "feltMain": "#2B1A45",
-    "feltShadow": "#180E29",
-    "rail": "#141118",
+    "feltMid": "#221338",
+    "feltShadow": "#160C26",
+    "rail": "#1A1620",
     "railDark": "#000000",
     "accent": "#A61B4A",
     "gold": "#2FE3D2",
-    "lineColor": "#E8DCF5",
+    "lineColor": "#EDE2FA",
     "tieBand": "#2FE3D2",
     "cardBack": "#12081A"
   },
   "materials": {
-    "feltPattern": "lattice",
+    "feltWeave": "lattice",
     "railStyle": "piano-black",
-    "cardPattern": "lattice",
-    "chipEdge": "bevel",
-    "chipRings": [
-      "#141118",
-      "#A61B4A",
-      "#2FE3D2"
-    ],
+    "borderOrnament": "neon-lattice",
+    "medallion": "crystal-facet",
+    "cardEngrave": "lattice",
+    "chipMould": "bevel",
+    "chipInserts": 10,
     "boardStyle": "neon",
     "monitorStyle": "neon-heavy",
-    "plaqueStyle": "neon-edge"
+    "plaqueStyle": "neon-edge",
+    "labelFont": "'Segoe UI',Roboto,Arial,sans-serif"
   },
-  "identity": {
-    "monogram": "M",
-    "chipMonogram": "MC"
-  },
-  "tableLayout": {
-    "shape": "kidney",
-    "massSeats": 7,
-    "vipSeats": 5,
+  "tableRules": {
+    "currency": "HKD",
+    "massLimits": {
+      "min": 500,
+      "max": 80000
+    },
+    "vipLimits": {
+      "min": 20000,
+      "max": 1500000
+    },
+    "commission": false,
+    "tiePayout": "8:1",
+    "sideBets": [
+      "Player Pair 11:1",
+      "Banker Pair 11:1",
+      "Perfect Pair 25:1"
+    ],
+    "smartTable": true,
+    "massSeatLabels": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "vipSeatLabels": [
+      1,
+      2,
+      3,
+      5,
+      6
+    ],
     "bigTableSeatLabels": [
       1,
       2,
@@ -51,31 +77,8 @@
       12,
       14,
       15
-    ],
-    "betOrderFromGuest": [
-      "player",
-      "banker",
-      "tie"
-    ],
-    "commissionBoxes": false,
-    "smartTable": true
+    ]
   },
-  "limitsExample": {
-    "currency": "HKD",
-    "mass": {
-      "min": 500,
-      "max": 80000
-    },
-    "vip": {
-      "min": 20000,
-      "max": 1500000
-    }
-  },
-  "sideBets": [
-    "Player Pair 11:1",
-    "Banker Pair 11:1",
-    "Perfect Pair 25:1"
-  ],
   "chipDenominations": [
     100,
     500,
@@ -83,5 +86,13 @@
     5000,
     10000
   ],
-  "dealerUniform": "黑襯衫 · 品紅織帶 · 短版馬甲"
+  "dealerUniform": {
+    "palette": [
+      "#141118",
+      "#A61B4A",
+      "#2FE3D2",
+      "#EDE2FA"
+    ],
+    "note": "黑襯衫 · 品紅織帶 · 短版馬甲"
+  }
 }

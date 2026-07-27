@@ -2,40 +2,65 @@
   "casinoId": "wynn",
   "displayName": "永利（仿真訓練主題）",
   "displayNameEn": "Wynn - Training Simulation Theme",
-  "disclaimer": "訓練仿真素材，非官方授權，品牌可識別但非 1:1 還原",
+  "disclaimer": "仿真訓練主題，非官方授權；訓練幣結算",
   "palette": {
     "feltMain": "#0F4032",
+    "feltMid": "#0C3428",
     "feltShadow": "#082A20",
-    "rail": "#5A3418",
-    "railDark": "#331C0C",
+    "rail": "#6B4020",
+    "railDark": "#2E1808",
     "accent": "#5C1A1A",
     "gold": "#C08A2E",
-    "lineColor": "#EBD9AE",
+    "lineColor": "#F0E0B8",
     "tieBand": "#C08A2E",
     "cardBack": "#5C1A1A"
   },
   "materials": {
-    "feltPattern": "petal",
+    "feltWeave": "petal",
     "railStyle": "walnut",
-    "cardPattern": "petal",
-    "chipEdge": "wide-gold",
-    "chipRings": [
-      "#5C1A1A",
-      "#C08A2E",
-      "#3A0F0F"
-    ],
+    "borderOrnament": "petal-chain",
+    "medallion": "prosperity-tree",
+    "cardEngrave": "petal",
+    "chipMould": "wide-gold",
+    "chipInserts": 12,
     "boardStyle": "walnut",
-    "monitorStyle": "gold-thin",
-    "plaqueStyle": "wood-brass"
+    "monitorStyle": "gilt-thin",
+    "plaqueStyle": "wood-brass",
+    "labelFont": "Georgia,'Palatino Linotype',serif"
   },
-  "identity": {
-    "monogram": "W",
-    "chipMonogram": "WN"
-  },
-  "tableLayout": {
-    "shape": "kidney",
-    "massSeats": 7,
-    "vipSeats": 5,
+  "tableRules": {
+    "currency": "HKD",
+    "massLimits": {
+      "min": 1000,
+      "max": 120000
+    },
+    "vipLimits": {
+      "min": 50000,
+      "max": 3000000
+    },
+    "commission": true,
+    "tiePayout": "8:1",
+    "sideBets": [
+      "Player Pair 11:1",
+      "Banker Pair 11:1"
+    ],
+    "smartTable": true,
+    "massSeatLabels": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "vipSeatLabels": [
+      1,
+      2,
+      3,
+      5,
+      6
+    ],
     "bigTableSeatLabels": [
       1,
       2,
@@ -51,30 +76,8 @@
       12,
       14,
       15
-    ],
-    "betOrderFromGuest": [
-      "player",
-      "banker",
-      "tie"
-    ],
-    "commissionBoxes": true,
-    "smartTable": true
+    ]
   },
-  "limitsExample": {
-    "currency": "HKD",
-    "mass": {
-      "min": 1000,
-      "max": 120000
-    },
-    "vip": {
-      "min": 50000,
-      "max": 3000000
-    }
-  },
-  "sideBets": [
-    "Player Pair 11:1",
-    "Banker Pair 11:1"
-  ],
   "chipDenominations": [
     100,
     500,
@@ -82,5 +85,13 @@
     5000,
     10000
   ],
-  "dealerUniform": "黑金馬甲 · 酒紅領飾 · 圓角金名牌"
+  "dealerUniform": {
+    "palette": [
+      "#151515",
+      "#C08A2E",
+      "#5C1A1A",
+      "#F0E0B8"
+    ],
+    "note": "黑金馬甲 · 酒紅領飾 · 圓角金名牌"
+  }
 }
