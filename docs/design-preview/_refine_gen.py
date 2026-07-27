@@ -17,6 +17,7 @@ import math
 ROOT = Path(r"E:\澳门开发\docs\design-preview")
 CASINO_DIR = ROOT / "casinos"
 ASSET_DIR = Path(r"E:\澳门开发\assets\casinos")
+GENERATED_ROOT = Path(r"E:\澳门开发\assets\generated")
 CASINO_DIR.mkdir(parents=True, exist_ok=True)
 ASSET_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1709,6 +1710,12 @@ table.spec th { background: rgba(255,255,255,0.05); white-space: nowrap; }
 .swatch span { opacity: 0.6; font-family: ui-monospace,Consolas,monospace; }
 footer.foot { margin: 64px 44px 0; padding-top: 20px;
   border-top: 1px solid rgba(255,255,255,0.1); font-size: 12.5px; opacity: 0.55; }
+.refgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+  gap:16px; margin-top:14px; }
+.ref { margin:0; background:#0A0A0E; border:1px solid rgba(255,255,255,0.09);
+  border-radius:8px; overflow:hidden; }
+.ref img { width:100%; height:auto; display:block; }
+.ref figcaption { padding:9px 12px; font-size:12px; opacity:0.66; }
 @media (max-width: 900px) {
   header.head, main, footer.foot { padding-left: 18px; padding-right: 18px;
     margin-left: 0; margin-right: 0; }
@@ -1738,6 +1745,37 @@ def swatch_block(casino):
         )
     return f'<div class="swatches">{"".join(cells)}</div>'
 
+
+
+REFERENCE_IMAGE_KINDS = [
+    ("felt-swatch", "呢面織紋 Felt weave"),
+    ("rail-material", "圍邊材質 Rail material"),
+    ("table-mood", "桌面氣氛 Table mood"),
+]
+
+
+def reference_image_block(casino):
+    """Link the generated art-direction references when they exist on disk.
+
+    These images inform material and lighting only. The SVG layout stays the
+    single source of truth for betting geometry, limits and payouts.
+    """
+    casino_directory = GENERATED_ROOT / casino["casino_id"]
+    tiles = []
+    for kind, caption in REFERENCE_IMAGE_KINDS:
+        if not (casino_directory / f"{kind}.png").exists():
+            continue
+        relative_source = f"../../../assets/generated/{casino['casino_id']}/{kind}.png"
+        tiles.append(
+            f'<figure class="ref"><img src="{relative_source}" alt="{caption}" loading="lazy"/>'
+            f'<figcaption>{caption}</figcaption></figure>'
+        )
+    if not tiles:
+        return (
+            '<p class="note">尚未產生材質參考圖，請執行 '
+            '<code>python tools/generate_reference_images.py --all</code> 後重新產生本頁。</p>'
+        )
+    return f'<div class="refgrid">{"".join(tiles)}</div>'
 
 def build_casino_page(casino, outcomes):
     """One refined page per casino."""
@@ -1863,7 +1901,17 @@ def build_casino_page(casino, outcomes):
 </section>
 
 <section>
-  <h2>9. 規格與色板 <span class="en">SPECIFICATION</span></h2>
+  <h2>9. 材質參考圖 <span class="en">ART DIRECTION REFERENCE</span></h2>
+  <p class="note">
+    下列為生成式<strong>材質與燈光參考</strong>，僅用於指導呢面織紋、圍邊材質與現場光氛。
+    版面幾何、注區位置、限紅與賠付一律以上方 SVG 精修稿與 Rule Pack 為準。
+    產生時已禁止文字、數字與任何品牌標識。
+  </p>
+  {reference_image_block(casino)}
+</section>
+
+<section>
+  <h2>10. 規格與色板 <span class="en">SPECIFICATION</span></h2>
   <table class="spec">
     <tr><th>casinoId</th><td><code>{casino["casino_id"]}</code></td></tr>
     <tr><th>大眾廳限紅</th><td>{currency} {casino["mass_min"]:,} – {casino["mass_max"]:,}</td></tr>

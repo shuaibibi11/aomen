@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+*.log
+
+# Credentials - never commit
+.env
+.env.*
+!.env.example
+
+# Generated image assets are large binaries; keep them out of git history.
+# Remove this rule once an asset pipeline (LFS or object storage) is in place.
+assets/generated/
+
+.DS_Store
+Thumbs.db

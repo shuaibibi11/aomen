@@ -52,6 +52,12 @@ table.spec th { background: rgba(255,255,255,0.05); white-space: nowrap; }
 .swatch span { opacity: 0.6; font-family: ui-monospace,Consolas,monospace; }
 footer.foot { margin: 64px 44px 0; padding-top: 20px;
   border-top: 1px solid rgba(255,255,255,0.1); font-size: 12.5px; opacity: 0.55; }
+.refgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+  gap:16px; margin-top:14px; }
+.ref { margin:0; background:#0A0A0E; border:1px solid rgba(255,255,255,0.09);
+  border-radius:8px; overflow:hidden; }
+.ref img { width:100%; height:auto; display:block; }
+.ref figcaption { padding:9px 12px; font-size:12px; opacity:0.66; }
 @media (max-width: 900px) {
   header.head, main, footer.foot { padding-left: 18px; padding-right: 18px;
     margin-left: 0; margin-right: 0; }
@@ -134,7 +140,17 @@ footer.foot { margin: 64px 44px 0; padding-top: 20px;
 </section>
 
 <section>
-  <h2>9. 規格與色板 <span class="en">SPECIFICATION</span></h2>
+  <h2>9. 材質參考圖 <span class="en">ART DIRECTION REFERENCE</span></h2>
+  <p class="note">
+    下列為生成式<strong>材質與燈光參考</strong>，僅用於指導呢面織紋、圍邊材質與現場光氛。
+    版面幾何、注區位置、限紅與賠付一律以上方 SVG 精修稿與 Rule Pack 為準。
+    產生時已禁止文字、數字與任何品牌標識。
+  </p>
+  <div class="refgrid"><figure class="ref"><img src="../../../assets/generated/sands-venetian/felt-swatch.png" alt="呢面織紋 Felt weave" loading="lazy"/><figcaption>呢面織紋 Felt weave</figcaption></figure><figure class="ref"><img src="../../../assets/generated/sands-venetian/rail-material.png" alt="圍邊材質 Rail material" loading="lazy"/><figcaption>圍邊材質 Rail material</figcaption></figure><figure class="ref"><img src="../../../assets/generated/sands-venetian/table-mood.png" alt="桌面氣氛 Table mood" loading="lazy"/><figcaption>桌面氣氛 Table mood</figcaption></figure></div>
+</section>
+
+<section>
+  <h2>10. 規格與色板 <span class="en">SPECIFICATION</span></h2>
   <table class="spec">
     <tr><th>casinoId</th><td><code>sands-venetian</code></td></tr>
     <tr><th>大眾廳限紅</th><td>HKD 1,000 – 100,000</td></tr>

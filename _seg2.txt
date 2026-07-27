@@ -1,0 +1,98 @@
+lass="note">
+    珠盤路每列六格、先上下再左右；大路同方向往下延伸、換方向開新列、和局於當格加綠斜線；
+    大眼仔 / 小路 / 曱甴路分別以偏移 1 / 2 / 3 由大路推導，紅為齊整、藍為不齊整。
+  </p>
+  <div class="canvas">{roadmap_svg(casino, outcomes)}</div>
+</section>
+
+<section>
+  <h2>7. 桌邊顯示器 <span class="en">TABLE-SIDE MONITOR</span></h2>
+  <p class="note">顯示本靴莊閒和統計與近十二局結果；外框與待機裝飾為本場專屬。</p>
+  <div class="canvas" style="max-width:760px">{result_monitor_svg(casino, outcomes)}</div>
+</section>
+
+<section>
+  <h2>8. 荷官制服風格 <span class="en">DEALER UNIFORM REFERENCE</span></h2>
+  <p class="note">{casino["dealer_uniform_note"]}。此為配色與版型參考，3D 模型於後續階段依此製作。</p>
+  <div class="row uniform">
+    <div class="tile">{dealer_uniform_svg(casino)}<div class="cap">制服參考</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>9. 規格與色板 <span class="en">SPECIFICATION</span></h2>
+  <table class="spec">
+    <tr><th>casinoId</th><td><code>{casino["casino_id"]}</code></td></tr>
+    <tr><th>大眾廳限紅</th><td>{currency} {casino["mass_min"]:,} – {casino["mass_max"]:,}</td></tr>
+    <tr><th>貴賓廳限紅</th><td>{currency} {casino["vip_min"]:,} – {casino["vip_max"]:,}</td></tr>
+    <tr><th>佣金規則</th><td>{commission_text}</td></tr>
+    <tr><th>邊注</th><td><ul style="margin:0;padding-left:18px">{side_bet_rows}</ul></td></tr>
+    <tr><th>桌面設備</th><td>{smart_text}</td></tr>
+    <tr><th>呢面織紋</th><td><code>{casino["felt_weave"]}</code></td></tr>
+    <tr><th>圍邊material</th><td><code>{casino["rail_style"]}</code></td></tr>
+    <tr><th>內圈線腳</th><td><code>{casino["border_ornament"]}</code></td></tr>
+    <tr><th>中心徽記</th><td><code>{casino["medallion"]}</code></td></tr>
+    <tr><th>牌背雕紋</th><td><code>{casino["card_engrave"]}</code></td></tr>
+    <tr><th>籌碼模具</th><td><code>{casino["chip_mould"]}</code> · {casino["chip_inserts"]} 嵌條</td></tr>
+    <tr><th>計分器外框</th><td><code>{casino["board_style"]}</code></td></tr>
+    <tr><th>顯示器外框</th><td><code>{casino["monitor_style"]}</code></td></tr>
+    <tr><th>注區字體</th><td><code>{casino["label_font"]}</code></td></tr>
+  </table>
+  {swatch_block(casino)}
+</section>
+
+</main>
+<footer class="foot">
+  本頁為訓練系統仿真設計稿，僅用於教學訓練，非任何賭場官方授權素材；限紅與賠付數值須以 Rule Pack 版本化資料為準。
+</footer>
+</body>
+</html>
+"""
+
+
+def build_index_page():
+    cards = []
+    for casino in CASINOS:
+        commission_text = "5% 佣金" if casino["commission"] else "免佣 · 莊六半賠"
+        cards.append(f"""
+      <a class="card" href="casinos/{casino["casino_id"]}.html">
+        <div class="thumb" style="background:linear-gradient(135deg,{casino["felt_main"]},{casino["felt_shadow"]})">
+          <span class="mono" style="color:{casino["gold"]};border-color:{casino["gold"]}">{casino["monogram"]}</span>
+        </div>
+        <div class="body">
+          <h3>{casino["display_name"]}</h3>
+          <p>{casino["refine_notes"]}</p>
+          <div class="tags">
+            <span>{commission_text}</span>
+            <span>{casino["currency"]} {casino["mass_min"]:,}+</span>
+            <span>{casino["felt_weave"]}</span>
+          </div>
+        </div>
+      </a>""")
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>澳門賭場訓練系統 · 牌桌資產精修總覽</title>
+<style>
+{PAGE_CSS}
+.grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:22px; margin-top:26px; }}
+.card {{ display:block; text-decoration:none; color:inherit; background:#0A0A0E;
+  border:1px solid rgba(255,255,255,0.1); border-radius:12px; overflow:hidden;
+  transition:border-color .18s, transform .18s; }}
+.card:hover {{ border-color:rgba(255,255,255,0.3); transform:translateY(-2px); }}
+.thumb {{ height:132px; display:flex; align-items:center; justify-content:center; }}
+.mono {{ width:62px; height:62px; border:2px solid; border-radius:50%; display:flex;
+  align-items:center; justify-content:center; font:600 27px Georgia,serif; }}
+.body {{ padding:16px 18px 18px; }}
+.body h3 {{ margin:0 0 8px; font-size:16.5px; }}
+.body p {{ margin:0; font-size:13px; opacity:0.7; line-height:1.6; }}
+.tags {{ margin-top:12px; display:flex; flex-wrap:wrap; gap:7px; }}
+.tags span {{ font-size:11.5px; padding:3px 9px; border-radius:3px;
+  border:1px solid rgba(255,255,255,0.2); opacity:0.85; }}
+</style>
+</head>
+<body>
+<header cla
