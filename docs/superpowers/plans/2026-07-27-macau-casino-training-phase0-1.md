@@ -33,6 +33,12 @@ apps/server              # RoomManager、基础 AI、WS、内存事件库
 
 ---
 
+## 前置条件
+
+- 仓库已 git init 且存在设计/计划的 root commit（若全新克隆无 git，先 git init 再提交文档）。
+- 本 Phase 边注范围：**仅 player_pair / banker_pair**（龙宝等留待规则包扩展，不进本 Phase DoD）。
+- Shoe 切牌/换靴：Rule Pack 可保留字段，**本 Phase 不实现 penetration 换靴**，避免半成品。
+
 ## Task 1: Monorepo 骨架
 
 **Files:** Create `package.json`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `.gitignore`, `README.md`, `packages/shared/*`
@@ -56,6 +62,7 @@ apps/server              # RoomManager、基础 AI、WS、内存事件库
 - [ ] **Step 2:** Branded ids：TableId、RoundId、SeatId、ActorId + asXxx helpers
 - [ ] **Step 3:** TableIntent：place_bet、clear_bets、no_more_bets、deal_next、reveal、settle_round、start_round、buy_in、cash_out
 - [ ] **Step 4:** TablePhase、TableEvent、TableSnapshot、SessionProfile（L/R、aiRoster、shoeSeed）
+- [ ] **Step 4b:** TableEvent 固定字段对齐 spec §4.6：`tableId, roundId, seq, actorId, intent?, accepted?, rejectReason?, phaseAfter/stateAfter, visibleMask?, rulePackId, rulePackVersion, at`（Intent 类事件必填 intent/accepted；结算类可无 intent）
 - [ ] **Step 5:** 测试 K=0、A=1、9+8=>7
 - [ ] **Step 6:** Run `pnpm --filter @mct/shared test` — PASS
 - [ ] **Step 7:** Commit `feat(shared): add cards, intents, events, snapshot types`
@@ -131,7 +138,16 @@ apps/server              # RoomManager、基础 AI、WS、内存事件库
 
 - [ ] **Step 1:** 构造注入 `drawCard: () => Card` 便于测试预定牌序
 - [ ] **Step 2:** 集成测试一局：start_round → place_bet → no_more_bets → deal_next* → settle_round；断言 outcome、ledger、events、seq
-- [ ] **Step 3:** 实现最小阶段：shoe_ready | round_betting | no_more_bets | dealing | settling | round_end
+- [ ] **Step 3:** 实现最小阶段与合法 Intent 表：
+  | phase | 合法 Intent |
+  |--------|-------------|
+  | shoe_ready | start_round (dealer/system) |
+  | round_betting | place_bet, clear_bets, no_more_bets |
+  | no_more_bets | deal_next |
+  | dealing | deal_next（发满初始 4 张后：若 natural 则进 settling；否则按 draw-table 决定是否继续发闲/庄第三张，发完进 settling） |
+  | settling | settle_round |
+  | round_end | start_round（下一局）或 cash_out |
+  **必须**在 dealing 路径调用 `isNatural` / `playerDrawsThird` / `bankerDrawsThird`，禁止两牌了事却声称完成补牌。
 - [ ] **Step 4:** 权限：仅 dealer 可停注/发牌/结算；玩家仅本 seat 下注
 - [ ] **Step 5:** 停注后下注 rejected 测试
 - [ ] **Step 6:** 免佣变体 banker 6 赔付测试
@@ -153,10 +169,11 @@ apps/server              # RoomManager、基础 AI、WS、内存事件库
 
 ## Task 10: 最小 Server
 
-**Files:** `apps/server/src/{memory-event-store,room-manager,ws-gateway,app,index}.ts`, `ai/basic-player-ai.ts`, `room-manager.test.ts`
+**Files:** `apps/server/package.json`, `tsconfig.json`, `vitest.config.ts`, `src/{memory-event-store,room-manager,ws-gateway,app,index}.ts`, `ai/basic-player-ai.ts`, `room-manager.test.ts`
 
+- [ ] **Step 0:** 建 `@mct/server` 包：依赖 workspace 的 shared、rule-packs、table-engine、room-protocol，以及 `ws`、typescript、vitest
 - [ ] **Step 1:** MemoryEventStore append/listByTable 测试
-- [ ] **Step 2:** RoomManager.createRoom 加载 dev pack，1 human + N basic AI
+- [ ] **Step 2:** RoomManager.createRoom 加载 dev pack，1 human + N basic AI；**创建后对每人座执行 buy_in（或构造时 ledger 预充最小带码）**，保证随后 place_bet 不会因余额 0 被拒
 - [ ] **Step 3:** Basic AI：round_betting 无注则最小限红随机闲/庄
 - [ ] **Step 4:** 无人类荷官时 SYSTEM_DEALER 在 tick 中自动 deal/settle
 - [ ] **Step 5:** RoomManager 单测推进一局（不启端口）
@@ -208,3 +225,4 @@ apps/server              # RoomManager、基础 AI、WS、内存事件库
 4. 赌场差异进配置与测试向量，不硬编码单店
 
 *Plan path: docs/superpowers/plans/2026-07-27-macau-casino-training-phase0-1.md*
+
