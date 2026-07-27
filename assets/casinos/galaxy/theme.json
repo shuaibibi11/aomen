@@ -1,36 +1,87 @@
 {
   "casinoId": "galaxy",
-  "displayName": {
-    "zh-Hant": "银河（仿真）",
-    "en": "Galaxy Training Theme"
-  },
-  "disclaimer": "仿真训练主题，非官方授权",
-  "mark": "G",
-  "markLabel": "GX",
-  "tokens": {
-    "felt": "#123A5C",
-    "feltShade": "#0B2A44",
-    "rail": "#8A9AAB",
-    "railEdge": "#D0D7E0",
+  "displayName": "銀河（仿真訓練主題）",
+  "displayNameEn": "Galaxy - Training Simulation Theme",
+  "disclaimer": "訓練仿真素材，非官方授權，品牌可識別但非 1:1 還原",
+  "palette": {
+    "feltMain": "#14405F",
+    "feltShadow": "#0A2740",
+    "rail": "#8D9CAD",
+    "railDark": "#5C6B7C",
     "accent": "#0B1E3A",
-    "gold": "#B8C4D4",
+    "gold": "#C6D2E0",
+    "lineColor": "#DCE6F0",
+    "tieBand": "#4FA3B8",
     "cardBack": "#0B1E3A"
   },
-  "patterns": {
-    "cardBack": "orbit",
-    "chipCenter": "GX",
-    "chipEdge": "double-metal",
-    "scoreStyle": "hud",
-    "monitorStyle": "slim",
-    "plaqueStyle": "capsule"
+  "materials": {
+    "feltPattern": "orbit",
+    "railStyle": "brushed-steel",
+    "cardPattern": "orbit",
+    "chipEdge": "double-ring",
+    "chipRings": [
+      "#3E8CA8",
+      "#C6D2E0",
+      "#12324A"
+    ],
+    "boardStyle": "hud",
+    "monitorStyle": "bezel-slim",
+    "plaqueStyle": "capsule-led"
   },
-  "dealerStyleNote": "深灰西装 · 银领结 · 冷光名牌",
-  "denominations": [
+  "identity": {
+    "monogram": "G",
+    "chipMonogram": "GX"
+  },
+  "tableLayout": {
+    "shape": "kidney",
+    "massSeats": 7,
+    "vipSeats": 5,
+    "bigTableSeatLabels": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      14,
+      15
+    ],
+    "betOrderFromGuest": [
+      "player",
+      "banker",
+      "tie"
+    ],
+    "commissionBoxes": false,
+    "smartTable": true
+  },
+  "limitsExample": {
+    "currency": "HKD",
+    "mass": {
+      "min": 500,
+      "max": 50000
+    },
+    "vip": {
+      "min": 10000,
+      "max": 1000000
+    }
+  },
+  "sideBets": [
+    "Player Pair 11:1",
+    "Banker Pair 11:1",
+    "Either Pair 5:1"
+  ],
+  "chipDenominations": [
     100,
     500,
     1000,
     5000,
     10000
   ],
-  "previewHtml": "docs/design-preview/casinos/galaxy.html"
+  "dealerUniform": "深灰西裝 · 銀色領結 · 冷光名牌"
 }

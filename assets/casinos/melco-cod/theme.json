@@ -1,36 +1,87 @@
 {
   "casinoId": "melco-cod",
-  "displayName": {
-    "zh-Hant": "新濠天地（仿真）",
-    "en": "Melco COD Training Theme"
-  },
-  "disclaimer": "仿真训练主题，非官方授权",
-  "mark": "M",
-  "markLabel": "MC",
-  "tokens": {
-    "felt": "#2A1840",
-    "feltShade": "#1A0F2A",
-    "rail": "#111111",
-    "railEdge": "#A61B4A",
+  "displayName": "新濠天地（仿真訓練主題）",
+  "displayNameEn": "Melco City of Dreams - Training Simulation Theme",
+  "disclaimer": "訓練仿真素材，非官方授權，品牌可識別但非 1:1 還原",
+  "palette": {
+    "feltMain": "#2B1A45",
+    "feltShadow": "#180E29",
+    "rail": "#141118",
+    "railDark": "#000000",
     "accent": "#A61B4A",
-    "gold": "#2EE6D6",
-    "cardBack": "#120818"
+    "gold": "#2FE3D2",
+    "lineColor": "#E8DCF5",
+    "tieBand": "#2FE3D2",
+    "cardBack": "#12081A"
   },
-  "patterns": {
-    "cardBack": "diamond",
-    "chipCenter": "MC",
+  "materials": {
+    "feltPattern": "lattice",
+    "railStyle": "piano-black",
+    "cardPattern": "lattice",
     "chipEdge": "bevel",
-    "scoreStyle": "neon",
-    "monitorStyle": "neon",
-    "plaqueStyle": "neon"
+    "chipRings": [
+      "#141118",
+      "#A61B4A",
+      "#2FE3D2"
+    ],
+    "boardStyle": "neon",
+    "monitorStyle": "neon-heavy",
+    "plaqueStyle": "neon-edge"
   },
-  "dealerStyleNote": "黑衫 · 品红织带 · 短马甲",
-  "denominations": [
+  "identity": {
+    "monogram": "M",
+    "chipMonogram": "MC"
+  },
+  "tableLayout": {
+    "shape": "kidney",
+    "massSeats": 7,
+    "vipSeats": 5,
+    "bigTableSeatLabels": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      14,
+      15
+    ],
+    "betOrderFromGuest": [
+      "player",
+      "banker",
+      "tie"
+    ],
+    "commissionBoxes": false,
+    "smartTable": true
+  },
+  "limitsExample": {
+    "currency": "HKD",
+    "mass": {
+      "min": 500,
+      "max": 80000
+    },
+    "vip": {
+      "min": 20000,
+      "max": 1500000
+    }
+  },
+  "sideBets": [
+    "Player Pair 11:1",
+    "Banker Pair 11:1",
+    "Perfect Pair 25:1"
+  ],
+  "chipDenominations": [
     100,
     500,
     1000,
     5000,
     10000
   ],
-  "previewHtml": "docs/design-preview/casinos/melco-cod.html"
+  "dealerUniform": "黑襯衫 · 品紅織帶 · 短版馬甲"
 }

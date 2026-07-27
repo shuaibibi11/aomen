@@ -1,36 +1,86 @@
 {
   "casinoId": "wynn",
-  "displayName": {
-    "zh-Hant": "永利（仿真）",
-    "en": "Wynn Training Theme"
-  },
-  "disclaimer": "仿真训练主题，非官方授权",
-  "mark": "W",
-  "markLabel": "WN",
-  "tokens": {
-    "felt": "#0F3D2E",
-    "feltShade": "#0A2F24",
-    "rail": "#4A2C14",
-    "railEdge": "#B8860B",
+  "displayName": "永利（仿真訓練主題）",
+  "displayNameEn": "Wynn - Training Simulation Theme",
+  "disclaimer": "訓練仿真素材，非官方授權，品牌可識別但非 1:1 還原",
+  "palette": {
+    "feltMain": "#0F4032",
+    "feltShadow": "#082A20",
+    "rail": "#5A3418",
+    "railDark": "#331C0C",
     "accent": "#5C1A1A",
-    "gold": "#B8860B",
+    "gold": "#C08A2E",
+    "lineColor": "#EBD9AE",
+    "tieBand": "#C08A2E",
     "cardBack": "#5C1A1A"
   },
-  "patterns": {
-    "cardBack": "petal",
-    "chipCenter": "WN",
+  "materials": {
+    "feltPattern": "petal",
+    "railStyle": "walnut",
+    "cardPattern": "petal",
     "chipEdge": "wide-gold",
-    "scoreStyle": "wood",
+    "chipRings": [
+      "#5C1A1A",
+      "#C08A2E",
+      "#3A0F0F"
+    ],
+    "boardStyle": "walnut",
     "monitorStyle": "gold-thin",
-    "plaqueStyle": "wood-gold"
+    "plaqueStyle": "wood-brass"
   },
-  "dealerStyleNote": "黑金马甲 · 酒红领饰 · 圆角金名牌",
-  "denominations": [
+  "identity": {
+    "monogram": "W",
+    "chipMonogram": "WN"
+  },
+  "tableLayout": {
+    "shape": "kidney",
+    "massSeats": 7,
+    "vipSeats": 5,
+    "bigTableSeatLabels": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      14,
+      15
+    ],
+    "betOrderFromGuest": [
+      "player",
+      "banker",
+      "tie"
+    ],
+    "commissionBoxes": true,
+    "smartTable": true
+  },
+  "limitsExample": {
+    "currency": "HKD",
+    "mass": {
+      "min": 1000,
+      "max": 120000
+    },
+    "vip": {
+      "min": 50000,
+      "max": 3000000
+    }
+  },
+  "sideBets": [
+    "Player Pair 11:1",
+    "Banker Pair 11:1"
+  ],
+  "chipDenominations": [
     100,
     500,
     1000,
     5000,
     10000
   ],
-  "previewHtml": "docs/design-preview/casinos/wynn.html"
+  "dealerUniform": "黑金馬甲 · 酒紅領飾 · 圓角金名牌"
 }

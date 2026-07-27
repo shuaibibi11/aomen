@@ -1,36 +1,86 @@
 {
   "casinoId": "sands-venetian",
-  "displayName": {
-    "zh-Hant": "金沙·威尼斯人（仿真）",
-    "en": "Sands Venetian Training Theme"
-  },
-  "disclaimer": "仿真训练主题，非官方授权",
-  "mark": "V",
-  "markLabel": "SV",
-  "tokens": {
-    "felt": "#0D5C45",
-    "feltShade": "#0A4A38",
-    "rail": "#E8E4DC",
-    "railEdge": "#C4A35A",
+  "displayName": "金沙 · 威尼斯人（仿真训练主题）",
+  "displayNameEn": "Sands Venetian - Training Simulation Theme",
+  "disclaimer": "訓練仿真素材，非官方授權，品牌可識別但非 1:1 還原",
+  "palette": {
+    "feltMain": "#0E6045",
+    "feltShadow": "#083A2A",
+    "rail": "#E9E3D6",
+    "railDark": "#B9A47A",
     "accent": "#1A4A7A",
-    "gold": "#C4A35A",
+    "gold": "#C9A44C",
+    "lineColor": "#F2EAD3",
+    "tieBand": "#C9A44C",
     "cardBack": "#123A66"
   },
-  "patterns": {
-    "cardBack": "arch",
-    "chipCenter": "SV-T",
-    "chipEdge": "fine",
-    "scoreStyle": "stone",
+  "materials": {
+    "feltPattern": "damask",
+    "railStyle": "marble",
+    "cardPattern": "arch",
+    "chipEdge": "fine-teeth",
+    "chipRings": [
+      "#1A4A7A",
+      "#C9A44C",
+      "#0E3358"
+    ],
+    "boardStyle": "stone",
     "monitorStyle": "gold-wide",
-    "plaqueStyle": "gold-rect"
+    "plaqueStyle": "brass-plate"
   },
-  "dealerStyleNote": "白衫 · 金棕背心 · 金名牌",
-  "denominations": [
+  "identity": {
+    "monogram": "V",
+    "chipMonogram": "SV"
+  },
+  "tableLayout": {
+    "shape": "kidney",
+    "massSeats": 7,
+    "vipSeats": 5,
+    "bigTableSeatLabels": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      14,
+      15
+    ],
+    "betOrderFromGuest": [
+      "player",
+      "banker",
+      "tie"
+    ],
+    "commissionBoxes": true,
+    "smartTable": true
+  },
+  "limitsExample": {
+    "currency": "HKD",
+    "mass": {
+      "min": 1000,
+      "max": 100000
+    },
+    "vip": {
+      "min": 20000,
+      "max": 2000000
+    }
+  },
+  "sideBets": [
+    "Player Pair 11:1",
+    "Banker Pair 11:1"
+  ],
+  "chipDenominations": [
     100,
     500,
     1000,
     5000,
     10000
   ],
-  "previewHtml": "docs/design-preview/casinos/sands-venetian.html"
+  "dealerUniform": "白襯衫 · 金棕背心 · 金色名牌 · 白手套"
 }

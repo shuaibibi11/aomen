@@ -1,36 +1,86 @@
 {
   "casinoId": "sjm-lisboa",
-  "displayName": {
-    "zh-Hant": "澳博·葡京意象（仿真）",
-    "en": "SJM Lisboa-inspired Theme"
-  },
-  "disclaimer": "仿真训练主题，非官方授权",
-  "mark": "S",
-  "markLabel": "SJ",
-  "tokens": {
-    "felt": "#0A4A32",
-    "feltShade": "#063524",
-    "rail": "#6B2B1F",
-    "railEdge": "#D4A017",
+  "displayName": "澳博 · 葡京意象（仿真訓練主題）",
+  "displayNameEn": "SJM Lisboa-inspired - Training Simulation Theme",
+  "disclaimer": "訓練仿真素材，非官方授權，品牌可識別但非 1:1 還原",
+  "palette": {
+    "feltMain": "#0B4E35",
+    "feltShadow": "#063324",
+    "rail": "#7A3020",
+    "railDark": "#4A1C10",
     "accent": "#9B1B1B",
     "gold": "#D4A017",
+    "lineColor": "#F0E2BE",
+    "tieBand": "#D4A017",
     "cardBack": "#9B1B1B"
   },
-  "patterns": {
-    "cardBack": "lotus",
-    "chipCenter": "SJ",
-    "chipEdge": "copper",
-    "scoreStyle": "classic-cn",
-    "monitorStyle": "copper",
+  "materials": {
+    "feltPattern": "lotus",
+    "railStyle": "rosewood-brass",
+    "cardPattern": "lotus",
+    "chipEdge": "copper-teeth",
+    "chipRings": [
+      "#9B1B1B",
+      "#D4A017",
+      "#0B4E35"
+    ],
+    "boardStyle": "classic-cn",
+    "monitorStyle": "copper-heavy",
     "plaqueStyle": "red-gold"
   },
-  "dealerStyleNote": "红黑马甲 · 铜名牌",
-  "denominations": [
+  "identity": {
+    "monogram": "S",
+    "chipMonogram": "SJ"
+  },
+  "tableLayout": {
+    "shape": "kidney",
+    "massSeats": 7,
+    "vipSeats": 5,
+    "bigTableSeatLabels": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      14,
+      15
+    ],
+    "betOrderFromGuest": [
+      "player",
+      "banker",
+      "tie"
+    ],
+    "commissionBoxes": true,
+    "smartTable": false
+  },
+  "limitsExample": {
+    "currency": "HKD",
+    "mass": {
+      "min": 200,
+      "max": 30000
+    },
+    "vip": {
+      "min": 10000,
+      "max": 1000000
+    }
+  },
+  "sideBets": [
+    "Player Pair 11:1",
+    "Banker Pair 11:1"
+  ],
+  "chipDenominations": [
     100,
     500,
     1000,
     5000,
     10000
   ],
-  "previewHtml": "docs/design-preview/casinos/sjm-lisboa.html"
+  "dealerUniform": "紅黑馬甲 · 銅色名牌"
 }
