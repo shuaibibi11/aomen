@@ -411,7 +411,12 @@ Room.seats[]: {
 
 ---
 
-## 12. 下一步
+## 12. 相关设计文档
+
+- UI / 场景 / 2.5D·3D 规范：`docs/superpowers/specs/2026-07-27-macau-casino-ui-scene-design-spec.md`
+- 全页面文字原型附录：`docs/superpowers/specs/2026-07-27-macau-casino-ui-wireframes-appendix.md`
+
+## 13. 下一步
 
 1. 用户审阅本文档（已确认整体 OK）。
 2. 使用 writing-plans 产出分模块实现计划（Phase 0–1 起）。
@@ -420,3 +425,4 @@ Room.seats[]: {
 ---
 
 *文档路径：docs/superpowers/specs/2026-07-27-macau-casino-training-design.md*
+
