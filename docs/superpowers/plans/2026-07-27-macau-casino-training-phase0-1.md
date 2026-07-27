@@ -151,6 +151,8 @@ apps/server              # RoomManager、基础 AI、WS、内存事件库
 - [ ] **Step 4:** 权限：仅 dealer 可停注/发牌/结算；玩家仅本 seat 下注
 - [ ] **Step 5:** 停注后下注 rejected 测试
 - [ ] **Step 6:** 免佣变体 banker 6 赔付测试
+- [ ] **Step 6b:** 边注 E2E：place_bet player_pair（固定牌序成对）→ settle 后断言边注派彩与 ledger
+- [ ] **Step 6c:** buy_in 合法相位：`shoe_ready` 与 `round_end`（创建桌可用 Intent buy_in 写入事件；禁止仅静默改余额却无事件，除非测试夹具注明）
 - [ ] **Step 7:** peekAllowed=false 时发牌即 revealed（咪牌完整流程可 Phase 后续加，但 Intent reveal 预留）
 - [ ] **Step 8:** `pnpm --filter @mct/table-engine test` — 全绿
 - [ ] **Step 9:** Commit `feat(table-engine): TableRuntime betting-deal-settle loop`
@@ -176,7 +178,7 @@ apps/server              # RoomManager、基础 AI、WS、内存事件库
 - [ ] **Step 2:** RoomManager.createRoom 加载 dev pack，1 human + N basic AI；**创建后对每人座执行 buy_in（或构造时 ledger 预充最小带码）**，保证随后 place_bet 不会因余额 0 被拒
 - [ ] **Step 3:** Basic AI：round_betting 无注则最小限红随机闲/庄
 - [ ] **Step 4:** 无人类荷官时 SYSTEM_DEALER 在 tick 中自动 deal/settle
-- [ ] **Step 5:** RoomManager 单测推进一局（不启端口）
+- [ ] **Step 5:** RoomManager 单测推进一局（不启端口）；断言每次 accepted 引擎事件均 `MemoryEventStore.append`
 - [ ] **Step 6:** ws 监听 PORT 8787，join + intent
 - [ ] **Step 7:** Commit `feat(server): room manager, basic AI, ws gateway`
 
@@ -225,4 +227,5 @@ apps/server              # RoomManager、基础 AI、WS、内存事件库
 4. 赌场差异进配置与测试向量，不硬编码单店
 
 *Plan path: docs/superpowers/plans/2026-07-27-macau-casino-training-phase0-1.md*
+
 
