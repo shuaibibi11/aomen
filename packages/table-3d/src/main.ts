@@ -2,10 +2,12 @@
  * Entry point: mount the preview scene and wire the control panel.
  */
 import {
+  buildTableViews,
   CASINO_IDS,
   PREVIEW_MODE_LABELS,
   PreviewApp,
   type PreviewMode,
+  type TableViewId,
 } from "./scene/preview-app.js";
 import { getCasinoTheme, type CasinoId } from "./specs/casino-theme.js";
 
@@ -71,6 +73,19 @@ function main(): void {
     casinoOptions,
     "sands-venetian" satisfies CasinoId,
     (casinoId) => previewApp.setCasino(casinoId),
+  );
+
+  // Table camera views. Labels come from the view definitions so the UI and
+  // the scene cannot drift apart.
+  const tableViewOptions = buildTableViews("mass").map((view) => ({
+    value: view.id,
+    label: view.label,
+  }));
+  buildOptionGroup(
+    requireElement("table-view-options"),
+    tableViewOptions,
+    "guest" satisfies TableViewId,
+    (viewId) => previewApp.setTableView(viewId),
   );
 
   const turntableToggle = requireElement<HTMLInputElement>("turntable-toggle");

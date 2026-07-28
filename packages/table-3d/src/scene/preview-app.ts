@@ -31,7 +31,14 @@ import {
   createLimitSign,
 } from "../models/table-furniture.js";
 import { createRoadmapMonitor } from "../models/roadmap-monitor.js";
+import { createBaccaratTable } from "../models/baccarat-table.js";
 import { SAMPLE_SHOE_RESULTS } from "../specs/sample-shoe.js";
+import {
+  computeSeatPlacements,
+  TABLE_DIMENSIONS_MM,
+  type TableVariant,
+} from "../specs/table-layout.js";
+import { buildTableViews, type TableViewId } from "../specs/table-views.js";
 import {
   createMemberCardSet,
   createPlaqueModel,
@@ -53,7 +60,9 @@ type PreviewMode =
   | "dealt-hand"
   | "dealing-shoe"
   | "dealer-station"
-  | "roadmap";
+  | "roadmap"
+  | "table-mass"
+  | "table-vip";
 
 const PREVIEW_MODE_LABELS: Record<PreviewMode, string> = {
   "chip-set": "籌碼全套 Chip set",
@@ -66,6 +75,14 @@ const PREVIEW_MODE_LABELS: Record<PreviewMode, string> = {
   "dealing-shoe": "牌靴 Dealing shoe",
   "dealer-station": "荷官檯面 Dealer station",
   roadmap: "路單 Roadmap",
+  "table-mass": "大眾廳牌桌 Mass table",
+  "table-vip": "貴賓廳牌桌 VIP table",
+};
+
+/** Modes that build a full table and therefore use the named camera views. */
+const TABLE_MODE_VARIANTS: Partial<Record<PreviewMode, TableVariant>> = {
+  "table-mass": "mass",
+  "table-vip": "vip",
 };
 
 const SAMPLE_HAND: ReadonlyArray<{ rank: CardRank; suit: CardSuit }> = [
@@ -91,6 +108,7 @@ export class PreviewApp {
   private activeCasinoId: CasinoId = "sands-venetian";
   private activeMode: PreviewMode = "chip-set";
   private turntableEnabled = true;
+  private activeTableViewId: TableViewId = "guest";
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({
@@ -133,6 +151,7 @@ export class PreviewApp {
     this.scene.add(new THREE.AmbientLight("#ffffff", 0.55));
 
     const keyLight = new THREE.DirectionalLight("#fff6e6", 2.6);
+    keyLight.name = "key-light";
     keyLight.position.set(0.22, 0.4, 0.24);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.set(1024, 1024);
@@ -201,6 +220,10 @@ export class PreviewApp {
       );
     }
 
+    if (TABLE_MODE_VARIANTS[this.activeMode] === undefined) {
+      this.applyPropLighting();
+    }
+
     switch (this.activeMode) {
       case "chip-set":
         this.buildChipSet(theme);
@@ -231,6 +254,12 @@ export class PreviewApp {
         break;
       case "roadmap":
         this.buildRoadmap(theme);
+        break;
+      case "table-mass":
+        this.buildFullTable(theme, "mass");
+        break;
+      case "table-vip":
+        this.buildFullTable(theme, "vip");
         break;
     }
 
@@ -420,6 +449,60 @@ export class PreviewApp {
     this.contentGroup.add(monitor);
   }
 
+  /** The complete table: body, printed felt, dealer station and demo bets. */
+  private buildFullTable(theme: CasinoTheme, variant: TableVariant): void {
+    const table = createBaccaratTable({
+      theme,
+      casinoId: this.activeCasinoId,
+      variant,
+    });
+    this.contentGroup.add(table);
+
+    // The prop-preview felt disc would intersect the table legs.
+    if (this.feltMesh !== null) {
+      this.feltMesh.visible = false;
+    }
+    this.applyRoomLighting();
+  }
+
+  /**
+   * Widen the key light for a 2.4 m table. The prop rig is scaled for a 39 mm
+   * chip, so its shadow frustum would clip most of the table away.
+   */
+  private applyRoomLighting(): void {
+    const keyLight = this.scene.getObjectByName("key-light");
+    if (!(keyLight instanceof THREE.DirectionalLight)) {
+      return;
+    }
+    keyLight.position.set(1.4, 3.2, 1.6);
+    keyLight.shadow.camera.near = 0.5;
+    keyLight.shadow.camera.far = 12;
+    keyLight.shadow.camera.left = -2.2;
+    keyLight.shadow.camera.right = 2.2;
+    keyLight.shadow.camera.top = 2.2;
+    keyLight.shadow.camera.bottom = -2.2;
+    keyLight.shadow.camera.updateProjectionMatrix();
+  }
+
+  /** Restore the close-up prop rig used by every non-table mode. */
+  private applyPropLighting(): void {
+    if (this.feltMesh !== null) {
+      this.feltMesh.visible = true;
+    }
+    const keyLight = this.scene.getObjectByName("key-light");
+    if (!(keyLight instanceof THREE.DirectionalLight)) {
+      return;
+    }
+    keyLight.position.set(0.22, 0.4, 0.24);
+    keyLight.shadow.camera.near = 0.05;
+    keyLight.shadow.camera.far = 1.6;
+    keyLight.shadow.camera.left = -0.25;
+    keyLight.shadow.camera.right = 0.25;
+    keyLight.shadow.camera.top = 0.25;
+    keyLight.shadow.camera.bottom = -0.25;
+    keyLight.shadow.camera.updateProjectionMatrix();
+  }
+
   private handleResize(): void {
     const width = this.canvas.clientWidth;
     const height = this.canvas.clientHeight;
@@ -450,8 +533,39 @@ export class PreviewApp {
   setMode(mode: PreviewMode): void {
     this.activeMode = mode;
     this.contentGroup.rotation.y = 0;
+    // A full table has a fixed orientation; the turntable only helps small props.
+    this.turntableEnabled =
+      this.turntableEnabled && TABLE_MODE_VARIANTS[mode] === undefined;
     this.rebuildContent();
     this.frameActiveContent();
+  }
+
+  setTableView(viewId: TableViewId): void {
+    this.activeTableViewId = viewId;
+    const tableVariant = TABLE_MODE_VARIANTS[this.activeMode];
+    if (tableVariant !== undefined) {
+      this.applyTableView(tableVariant, viewId);
+    }
+  }
+
+  /** Move the camera to one of the named table viewpoints. */
+  private applyTableView(variant: TableVariant, viewId: TableViewId): void {
+    const view = buildTableViews(variant).find((entry) => entry.id === viewId);
+    if (view === undefined) {
+      return;
+    }
+
+    // A 2.4 m table needs a much longer clip range than a 39 mm chip.
+    this.camera.near = 0.05;
+    this.camera.far = 60;
+    this.camera.fov = viewId === "guest" ? 52 : 44;
+    this.camera.updateProjectionMatrix();
+
+    this.controls.minDistance = 0.3;
+    this.controls.maxDistance = 12;
+    this.camera.position.copy(view.cameraPosition);
+    this.controls.target.copy(view.target);
+    this.controls.update();
   }
 
   /**
@@ -460,6 +574,12 @@ export class PreviewApp {
    * fixed camera would either clip the tray or lose the chip.
    */
   private frameActiveContent(): void {
+    const tableVariant = TABLE_MODE_VARIANTS[this.activeMode];
+    if (tableVariant !== undefined) {
+      this.applyTableView(tableVariant, this.activeTableViewId);
+      return;
+    }
+
     const bounds = new THREE.Box3().setFromObject(this.contentGroup);
     if (bounds.isEmpty()) {
       return;
@@ -527,6 +647,17 @@ export class PreviewApp {
         `${MEMBER_CARD_DIMENSIONS_MM.width} × ${MEMBER_CARD_DIMENSIONS_MM.height} mm（ID-1）`,
       ],
       ["幣別", `${theme.tableRules.currency}（訓練幣）`],
+      [
+        "牌桌尺寸",
+        `${TABLE_DIMENSIONS_MM.width} × ${TABLE_DIMENSIONS_MM.depth} mm · 檯面高 ${TABLE_DIMENSIONS_MM.surfaceHeight} mm`,
+      ],
+      [
+        "座位",
+        computeSeatPlacements(TABLE_MODE_VARIANTS[this.activeMode] ?? "mass")
+          .map((seat) => seat.label)
+          .join(" · "),
+      ],
+      ["佣金格", theme.tableRules.commission ? "有（每座一格）" : "無（免佣桌）"],
     ];
     panel.innerHTML = rows
       .map(([label, value]) => `<dt>${label}</dt><dd>${value}</dd>`)
@@ -570,5 +701,5 @@ export class PreviewApp {
   }
 }
 
-export { CASINO_IDS, PREVIEW_MODE_LABELS };
-export type { PreviewMode };
+export { buildTableViews, CASINO_IDS, PREVIEW_MODE_LABELS, TABLE_MODE_VARIANTS };
+export type { PreviewMode, TableViewId };
