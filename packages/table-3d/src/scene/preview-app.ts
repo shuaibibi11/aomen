@@ -24,6 +24,14 @@ import {
 import { createChipModel, createChipStack } from "../models/chip.js";
 import { createCardHand, createCardModel } from "../models/card.js";
 import { createChipTray } from "../models/chip-tray.js";
+import { createCutCard, createDealingShoe } from "../models/dealing-shoe.js";
+import {
+  createCommissionMarkerSet,
+  createDiscardHolder,
+  createLimitSign,
+} from "../models/table-furniture.js";
+import { createRoadmapMonitor } from "../models/roadmap-monitor.js";
+import { SAMPLE_SHOE_RESULTS } from "../specs/sample-shoe.js";
 import {
   createMemberCardSet,
   createPlaqueModel,
@@ -42,7 +50,10 @@ type PreviewMode =
   | "chip-tray"
   | "member-cards"
   | "card-faces"
-  | "dealt-hand";
+  | "dealt-hand"
+  | "dealing-shoe"
+  | "dealer-station"
+  | "roadmap";
 
 const PREVIEW_MODE_LABELS: Record<PreviewMode, string> = {
   "chip-set": "籌碼全套 Chip set",
@@ -52,6 +63,9 @@ const PREVIEW_MODE_LABELS: Record<PreviewMode, string> = {
   "member-cards": "會員卡 Member cards",
   "card-faces": "撲克牌面 Card faces",
   "dealt-hand": "發牌手牌 Dealt hand",
+  "dealing-shoe": "牌靴 Dealing shoe",
+  "dealer-station": "荷官檯面 Dealer station",
+  roadmap: "路單 Roadmap",
 };
 
 const SAMPLE_HAND: ReadonlyArray<{ rank: CardRank; suit: CardSuit }> = [
@@ -209,6 +223,15 @@ export class PreviewApp {
       case "dealt-hand":
         this.buildDealtHand(theme);
         break;
+      case "dealing-shoe":
+        this.buildDealingShoe(theme);
+        break;
+      case "dealer-station":
+        this.buildDealerStation(theme);
+        break;
+      case "roadmap":
+        this.buildRoadmap(theme);
+        break;
     }
 
     this.updateInfoPanel();
@@ -340,6 +363,61 @@ export class PreviewApp {
     });
     betStack.position.set(0, 0, 0.075);
     this.contentGroup.add(betStack);
+  }
+
+  /** Shoe with cut card beside it. */
+  private buildDealingShoe(theme: CasinoTheme): void {
+    const shoe = createDealingShoe({ theme, casinoId: this.activeCasinoId });
+    this.contentGroup.add(shoe);
+
+    const cutCard = createCutCard(theme);
+    cutCard.position.set(
+      0.06 + 0.015,
+      0.002,
+      0,
+    );
+    this.contentGroup.add(cutCard);
+  }
+
+  /** Dealer's working area: chip tray, shoe, discard holder, limit sign,
+   *  commission markers — the complete set a trainer needs to demonstrate. */
+  private buildDealerStation(theme: CasinoTheme): void {
+    const tray = createChipTray({ theme, casinoId: this.activeCasinoId, chipsPerChannel: 8 });
+    tray.position.set(0, 0, 0);
+    this.contentGroup.add(tray);
+
+    const shoe = createDealingShoe({ theme, casinoId: this.activeCasinoId });
+    shoe.position.set(0.36, 0, 0);
+    this.contentGroup.add(shoe);
+
+    const discard = createDiscardHolder({ theme, casinoId: this.activeCasinoId, fillRatio: 0.4 });
+    discard.position.set(-0.36, 0, 0);
+    this.contentGroup.add(discard);
+
+    const sign = createLimitSign({
+      theme,
+      casinoId: this.activeCasinoId,
+      minimumBet: theme.tableRules.commission ? 500 : 500,
+      maximumBet: 50000,
+    });
+    sign.position.set(0.6, 0, -0.04);
+    this.contentGroup.add(sign);
+
+    if (theme.tableRules.commission) {
+      const markers = createCommissionMarkerSet(theme, 7);
+      markers.position.set(0, 0.004, 0.24);
+      this.contentGroup.add(markers);
+    }
+  }
+
+  /** Roadmap monitor showing a worked sample shoe. */
+  private buildRoadmap(theme: CasinoTheme): void {
+    const monitor = createRoadmapMonitor({
+      theme,
+      casinoId: this.activeCasinoId,
+      results: SAMPLE_SHOE_RESULTS,
+    });
+    this.contentGroup.add(monitor);
   }
 
   private handleResize(): void {

@@ -72,6 +72,76 @@ export const MEMBER_CARD_DIMENSIONS_MM = {
 } as const;
 
 /**
+ * Eight-deck dealing shoe. Manufacturer sizes cluster around 420x105x145 mm;
+ * the front is a sloped mouth the dealer slides cards out of, and the rear
+ * carries a weighted roller that presses the stack forward.
+ */
+export const DEALING_SHOE_DIMENSIONS_MM = {
+  length: 420,
+  width: 105,
+  /** Height at the tall rear wall. */
+  rearHeight: 145,
+  /** Height at the low front mouth where cards leave the shoe. */
+  frontHeight: 62,
+  wallThickness: 6,
+  baseThickness: 8,
+  /** Width of the slot the dealer's thumb passes through. */
+  mouthOpening: 74,
+} as const;
+
+/**
+ * The cut card is inserted near the back of the stack. When it reaches the
+ * mouth the shoe is finished, which is how penetration is enforced.
+ */
+export const CUT_CARD_DIMENSIONS_MM = {
+  width: 60,
+  height: 92,
+  thickness: 1.2,
+} as const;
+
+/**
+ * Eight-deck discard holder, sized from the manufactured 105x74x174 mm part.
+ * Used cards are dropped in face down until the shoe ends.
+ */
+export const DISCARD_HOLDER_DIMENSIONS_MM = {
+  width: 105,
+  depth: 74,
+  height: 174,
+  wallThickness: 5,
+  baseThickness: 10,
+} as const;
+
+/** Table limit sign standing at the dealer's right. */
+export const LIMIT_SIGN_DIMENSIONS_MM = {
+  width: 150,
+  height: 100,
+  thickness: 9,
+  /** Height of the wedge foot that props the sign up. */
+  baseHeight: 16,
+  /** Backwards lean so the face reads from the player side. */
+  leanDegrees: 14,
+} as const;
+
+/** Commission markers sit on the layout to flag a seat that owes commission. */
+export const COMMISSION_MARKER_DIMENSIONS_MM = {
+  diameter: 25,
+  thickness: 4,
+} as const;
+
+/**
+ * Roadmap monitor mounted in the table surface. A 16:9 panel is standard, and
+ * the bezel is deep enough to protect the glass from chips.
+ */
+export const ROADMAP_MONITOR_DIMENSIONS_MM = {
+  screenWidth: 420,
+  screenHeight: 236,
+  bezelWidth: 14,
+  bodyDepth: 32,
+  /** Backwards lean so the dealer and players both read it. */
+  leanDegrees: 22,
+} as const;
+
+/**
  * Dealer chip trays are built around rows of twenty chips. The common casino
  * tray is five rows wide with a 68 mm row pitch.
  */
@@ -127,6 +197,49 @@ export const MEMBER_CARD_SIZE = {
   height: millimetresToMetres(MEMBER_CARD_DIMENSIONS_MM.height),
   thickness: millimetresToMetres(MEMBER_CARD_DIMENSIONS_MM.thickness),
   cornerRadius: millimetresToMetres(MEMBER_CARD_DIMENSIONS_MM.cornerRadius),
+} as const;
+
+export const DEALING_SHOE_SIZE = {
+  length: millimetresToMetres(DEALING_SHOE_DIMENSIONS_MM.length),
+  width: millimetresToMetres(DEALING_SHOE_DIMENSIONS_MM.width),
+  rearHeight: millimetresToMetres(DEALING_SHOE_DIMENSIONS_MM.rearHeight),
+  frontHeight: millimetresToMetres(DEALING_SHOE_DIMENSIONS_MM.frontHeight),
+  wallThickness: millimetresToMetres(DEALING_SHOE_DIMENSIONS_MM.wallThickness),
+  baseThickness: millimetresToMetres(DEALING_SHOE_DIMENSIONS_MM.baseThickness),
+  mouthOpening: millimetresToMetres(DEALING_SHOE_DIMENSIONS_MM.mouthOpening),
+} as const;
+
+export const CUT_CARD_SIZE = {
+  width: millimetresToMetres(CUT_CARD_DIMENSIONS_MM.width),
+  height: millimetresToMetres(CUT_CARD_DIMENSIONS_MM.height),
+  thickness: millimetresToMetres(CUT_CARD_DIMENSIONS_MM.thickness),
+} as const;
+
+export const DISCARD_HOLDER_SIZE = {
+  width: millimetresToMetres(DISCARD_HOLDER_DIMENSIONS_MM.width),
+  depth: millimetresToMetres(DISCARD_HOLDER_DIMENSIONS_MM.depth),
+  height: millimetresToMetres(DISCARD_HOLDER_DIMENSIONS_MM.height),
+  wallThickness: millimetresToMetres(DISCARD_HOLDER_DIMENSIONS_MM.wallThickness),
+  baseThickness: millimetresToMetres(DISCARD_HOLDER_DIMENSIONS_MM.baseThickness),
+} as const;
+
+export const LIMIT_SIGN_SIZE = {
+  width: millimetresToMetres(LIMIT_SIGN_DIMENSIONS_MM.width),
+  height: millimetresToMetres(LIMIT_SIGN_DIMENSIONS_MM.height),
+  thickness: millimetresToMetres(LIMIT_SIGN_DIMENSIONS_MM.thickness),
+  baseHeight: millimetresToMetres(LIMIT_SIGN_DIMENSIONS_MM.baseHeight),
+} as const;
+
+export const COMMISSION_MARKER_SIZE = {
+  radius: millimetresToMetres(COMMISSION_MARKER_DIMENSIONS_MM.diameter / 2),
+  thickness: millimetresToMetres(COMMISSION_MARKER_DIMENSIONS_MM.thickness),
+} as const;
+
+export const ROADMAP_MONITOR_SIZE = {
+  screenWidth: millimetresToMetres(ROADMAP_MONITOR_DIMENSIONS_MM.screenWidth),
+  screenHeight: millimetresToMetres(ROADMAP_MONITOR_DIMENSIONS_MM.screenHeight),
+  bezelWidth: millimetresToMetres(ROADMAP_MONITOR_DIMENSIONS_MM.bezelWidth),
+  bodyDepth: millimetresToMetres(ROADMAP_MONITOR_DIMENSIONS_MM.bodyDepth),
 } as const;
 
 export const CHIP_TRAY_SIZE = {
