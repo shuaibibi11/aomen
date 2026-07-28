@@ -1,0 +1,36 @@
+{
+  "id": "generic-macau-baccarat",
+  "version": "1.0.0",
+  "displayName": "Generic Macau Baccarat (Dev)",
+  "variant": "standard",
+  "limits": {
+    "min": 100,
+    "max": 100000
+  },
+  "commission": {
+    "rate": 0.05
+  },
+  "mainPayouts": {
+    "player": 1,
+    "banker": 1,
+    "tie": 8,
+    "bankerSixPayout": 0.5
+  },
+  "sideBets": [
+    { "kind": "player_pair", "payout": 11 },
+    { "kind": "banker_pair", "payout": 11 }
+  ],
+  "shoe": {
+    "deckCount": 8,
+    "penetration": 0.9
+  },
+  "dealing": {
+    "peekAllowed": false
+  },
+  "chipset": {
+    "currency": "HKD",
+    "denominations": [100, 500, 1000, 5000, 10000]
+  },
+  "scriptPackId": "baseline-cantonese",
+  "sceneProfile": "sands-venetian"
+}
