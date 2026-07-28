@@ -540,6 +540,14 @@ export class PreviewApp {
     this.frameActiveContent();
   }
 
+  /**
+   * The live scene graph, exposed so verification tooling can raycast against
+   * the real meshes instead of trusting the layout constants.
+   */
+  get sceneGraph(): THREE.Scene {
+    return this.scene;
+  }
+
   setTableView(viewId: TableViewId): void {
     this.activeTableViewId = viewId;
     const tableVariant = TABLE_MODE_VARIANTS[this.activeMode];

@@ -10,8 +10,14 @@
 import * as THREE from "three";
 import type { CasinoTheme } from "../specs/casino-theme.js";
 import {
+  buildSeatBetSpots,
   computeSeatPlacements,
-  TABLE_SIZE,
+  FELT_INSET,
+  OUTLINE_DEALER_DEPTH_RATIO,
+  SEAT_NUMBER_LOCAL_Z,
+  type BetSpotId,
+  type BetSpotSpec,
+  type SeatPlacement,
   type TableVariant,
 } from "../specs/table-layout.js";
 
@@ -33,18 +39,33 @@ interface DrawContext {
 /**
  * Convert a table-space position in metres into texture pixels.
  *
- * The felt UV covers the table bounding box, so the texture origin is the
- * bottom-left of that box. Table Z grows towards the guest, and texture Y grows
- * downwards, hence the flip.
+ * This is the exact inverse of the UV mapping the felt geometry uses, and it
+ * has to stay that way or the printed ink lands somewhere other than where a
+ * raycast reads it. The felt UVs come from the felt outline bounding box, which
+ * is NOT centred on the table: the flat dealer edge sits at +34% of the felt
+ * depth and the guest apex reaches -66%, so the box is asymmetric in Z.
+ *
+ * Deriving the mapping (see buildFeltGeometry):
+ *   - outline point (ox, oy) maps to world (ox, -oy) after rotateX(-π/2),
+ *     so a world (x, z) came from outline (x, -z)
+ *   - u = (x + feltHalfWidth) / feltWidth
+ *   - v = (-z + dealerDepth) / feltDepth,  dealerDepth = 0.34 * feltDepth
+ *   - flipY sampling puts V=0 at the canvas bottom, so pixelY = (1 - v) * height
+ *
+ * Substituting an isotropic pixels-per-metre (width = feltWidth * ppm,
+ * height = feltDepth * ppm) collapses to the offsets below. An earlier version
+ * centred on the whole table instead, which shifted every printed mark by
+ * 0.16 * height in Z and pushed the outer seat boxes off their computed spots.
  */
 function toTexturePixels(
   draw: DrawContext,
   x: number,
   z: number,
 ): { pixelX: number; pixelY: number } {
+  const dealerDepth = OUTLINE_DEALER_DEPTH_RATIO * FELT_INSET.depth;
   return {
-    pixelX: draw.width / 2 + x * draw.pixelsPerMetre,
-    pixelY: draw.height / 2 - z * draw.pixelsPerMetre,
+    pixelX: (x + FELT_INSET.halfWidth) * draw.pixelsPerMetre,
+    pixelY: (z + dealerDepth) * draw.pixelsPerMetre,
   };
 }
 
@@ -132,112 +153,119 @@ function fillRoundedRect(
   context.fill();
 }
 
+/** Ink colour for each betting spot, so the three main bets stay tellable apart. */
+function resolveSpotInk(theme: CasinoTheme, spotId: BetSpotId): string {
+  switch (spotId) {
+    case "banker":
+    case "banker-pair":
+      return theme.palette.gold;
+    case "tie":
+      return theme.palette.tieBand;
+    default:
+      return theme.palette.lineColor;
+  }
+}
+
 /**
- * One seat's printed block: three stacked betting boxes plus two pair circles
- * and the seat number, all rotated to square up with the guest.
+ * Draw one betting spot in the seat's local frame.
+ *
+ * The spot's own `localX` / `localZ` are used directly as canvas coordinates:
+ * the caller has already translated to the seat and applied its rotation, and
+ * the canvas frame is set up so canvas +X is world +X and canvas +Y is world +Z.
+ */
+function drawBetSpot(
+  draw: DrawContext,
+  theme: CasinoTheme,
+  spot: BetSpotSpec,
+): void {
+  const { context, pixelsPerMetre } = draw;
+  const inkColour = resolveSpotInk(theme, spot.id);
+  const centreX = spot.localX * pixelsPerMetre;
+  const centreY = spot.localZ * pixelsPerMetre;
+  const strokeWidth = Math.max(1.8, pixelsPerMetre * 0.0024);
+
+  if (spot.shape === "circle") {
+    const radius = spot.radius * pixelsPerMetre;
+    context.beginPath();
+    context.arc(centreX, centreY, radius, 0, Math.PI * 2);
+    context.fillStyle = "rgba(0,0,0,0.20)";
+    context.fill();
+    context.strokeStyle = inkColour;
+    context.lineWidth = strokeWidth;
+    context.stroke();
+
+    context.fillStyle = inkColour;
+    context.font = `600 ${Math.round(radius * 0.52)}px 'Microsoft JhengHei', sans-serif`;
+    context.fillText(spot.label, centreX, centreY - radius * 0.18);
+    context.globalAlpha = 0.75;
+    context.font = `500 ${Math.round(radius * 0.36)}px Georgia, serif`;
+    context.fillText(spot.sublabel, centreX, centreY + radius * 0.38);
+    context.globalAlpha = 1;
+    return;
+  }
+
+  const boxWidth = spot.width * pixelsPerMetre;
+  const boxDepth = spot.depth * pixelsPerMetre;
+  const boxLeft = centreX - boxWidth / 2;
+  const boxTop = centreY - boxDepth / 2;
+  const cornerRadius = boxDepth * 0.14;
+
+  context.fillStyle = spot.id === "banker"
+    ? "rgba(0,0,0,0.26)"
+    : "rgba(0,0,0,0.15)";
+  fillRoundedRect(context, boxLeft, boxTop, boxWidth, boxDepth, cornerRadius);
+
+  context.strokeStyle = inkColour;
+  context.lineWidth = strokeWidth;
+  strokeRoundedRect(context, boxLeft, boxTop, boxWidth, boxDepth, cornerRadius);
+
+  context.fillStyle = inkColour;
+  context.font = `600 ${Math.round(boxDepth * 0.32)}px 'Microsoft JhengHei', Georgia, serif`;
+  context.fillText(spot.label, centreX, centreY - boxDepth * 0.12);
+
+  context.globalAlpha = 0.74;
+  context.font = `500 ${Math.round(boxDepth * 0.22)}px Georgia, serif`;
+  context.fillText(spot.sublabel, centreX, centreY + boxDepth * 0.24);
+  context.globalAlpha = 1;
+}
+
+/**
+ * One seat's printed block, drawn from the shared bet-spot specs.
+ *
+ * Drawing from the same `BetSpotSpec` list that `computeBetSpotPosition` reads is
+ * what keeps a printed box and the chip that belongs in it aligned. An earlier
+ * version kept its own hard-coded box sizes here and the two drifted apart: the
+ * outer seats' printed boxes ended up beside their computed centres, which the
+ * felt-mapping verifier caught as missing ink at four of the seven seats.
  */
 function drawSeatBlock(
   draw: DrawContext,
   theme: CasinoTheme,
-  seatLabel: number,
-  seatX: number,
-  seatZ: number,
-  facingRadians: number,
+  seat: SeatPlacement,
+  spots: readonly BetSpotSpec[],
 ): void {
   const { context, pixelsPerMetre } = draw;
-  const { pixelX, pixelY } = toTexturePixels(draw, seatX, seatZ);
-
-  // Box sizes in metres, taken from the printed proportions on the SVG sheets.
-  const boxWidth = 0.19 * pixelsPerMetre;
-  const boxHeight = 0.052 * pixelsPerMetre;
-  const boxGap = 0.009 * pixelsPerMetre;
+  const { pixelX, pixelY } = toTexturePixels(draw, seat.x, seat.z);
 
   context.save();
   context.translate(pixelX, pixelY);
-  // Texture Y is flipped relative to table Z, so the facing angle flips too.
-  context.rotate(-facingRadians);
-
+  // Canvas +Y matches world +Z, so the seat's world rotation applies directly.
+  context.rotate(seat.facingRadians);
   context.textAlign = "center";
   context.textBaseline = "middle";
 
-  const boxes: ReadonlyArray<{
-    label: string;
-    sublabel: string;
-    fill: string;
-    stroke: string;
-  }> = [
-    {
-      label: "閒 PLAYER",
-      sublabel: "1 : 1",
-      fill: "rgba(0,0,0,0.14)",
-      stroke: theme.palette.lineColor,
-    },
-    {
-      label: "莊 BANKER",
-      sublabel: theme.tableRules.commission ? "1 : 1 (−5%)" : "1 : 1",
-      fill: "rgba(0,0,0,0.24)",
-      stroke: theme.palette.gold,
-    },
-    {
-      label: "和 TIE",
-      sublabel: theme.tableRules.tiePayout,
-      fill: "rgba(0,0,0,0.16)",
-      stroke: theme.palette.tieBand,
-    },
-  ];
-
-  // PLAYER nearest the guest means the largest positive local Y in texture space.
-  boxes.forEach((box, boxIndex) => {
-    const boxTop = (1 - boxIndex) * (boxHeight + boxGap) - boxHeight / 2;
-
-    context.fillStyle = box.fill;
-    fillRoundedRect(context, -boxWidth / 2, boxTop, boxWidth, boxHeight, boxHeight * 0.16);
-
-    context.strokeStyle = box.stroke;
-    context.lineWidth = Math.max(1.6, pixelsPerMetre * 0.0022);
-    strokeRoundedRect(context, -boxWidth / 2, boxTop, boxWidth, boxHeight, boxHeight * 0.16);
-
-    context.fillStyle = box.stroke;
-    context.font = `600 ${Math.round(boxHeight * 0.4)}px 'Microsoft JhengHei', Georgia, serif`;
-    context.fillText(box.label, 0, boxTop + boxHeight * 0.36);
-
-    context.globalAlpha = 0.72;
-    context.font = `500 ${Math.round(boxHeight * 0.26)}px Georgia, serif`;
-    context.fillText(box.sublabel, 0, boxTop + boxHeight * 0.74);
-    context.globalAlpha = 1;
-  });
-
-  // Pair side bets: two small circles flanking the block, nearest the guest.
-  const pairRadius = boxHeight * 0.34;
-  const pairY = 1.6 * (boxHeight + boxGap);
-  const pairOffsetX = boxWidth * 0.3;
-  const pairs: ReadonlyArray<{ label: string; colour: string; offsetX: number }> = [
-    { label: "閒對", colour: theme.palette.lineColor, offsetX: -pairOffsetX },
-    { label: "莊對", colour: theme.palette.gold, offsetX: pairOffsetX },
-  ];
-
-  for (const pair of pairs) {
-    context.beginPath();
-    context.arc(pair.offsetX, pairY, pairRadius, 0, Math.PI * 2);
-    context.fillStyle = "rgba(0,0,0,0.18)";
-    context.fill();
-    context.strokeStyle = pair.colour;
-    context.lineWidth = Math.max(1.4, pixelsPerMetre * 0.0018);
-    context.stroke();
-
-    context.fillStyle = pair.colour;
-    context.font = `600 ${Math.round(pairRadius * 0.62)}px 'Microsoft JhengHei', sans-serif`;
-    context.fillText(pair.label, pair.offsetX, pairY - pairRadius * 0.12);
-    context.globalAlpha = 0.7;
-    context.font = `500 ${Math.round(pairRadius * 0.42)}px Georgia, serif`;
-    context.fillText("11:1", pair.offsetX, pairY + pairRadius * 0.45);
-    context.globalAlpha = 1;
+  for (const spot of spots) {
+    drawBetSpot(draw, theme, spot);
   }
 
-  // Seat number printed on the felt edge, outside the boxes.
+  // Seat number printed just inside the guest edge of the block.
   context.fillStyle = theme.palette.gold;
-  context.font = `700 ${Math.round(boxHeight * 0.72)}px Georgia, serif`;
-  context.fillText(String(seatLabel), 0, -2.05 * (boxHeight + boxGap));
+  context.font = `700 ${Math.round(0.03 * pixelsPerMetre)}px Georgia, serif`;
+  context.fillText(
+    String(seat.label),
+    0,
+    SEAT_NUMBER_LOCAL_Z * pixelsPerMetre,
+  );
 
   context.restore();
 }
@@ -334,10 +362,13 @@ export function createFeltLayoutTexture(
 ): THREE.CanvasTexture {
   const { theme, variant } = options;
 
+  // The canvas covers the felt bounding box, not the whole table, so the
+  // pixels-per-metre here matches the felt UV mapping toTexturePixels inverts.
+  const feltWidth = FELT_INSET.halfWidth * 2;
   const canvas = document.createElement("canvas");
   canvas.width = LAYOUT_TEXTURE_WIDTH;
   canvas.height = Math.round(
-    (LAYOUT_TEXTURE_WIDTH * TABLE_SIZE.depth) / TABLE_SIZE.width,
+    (LAYOUT_TEXTURE_WIDTH * FELT_INSET.depth) / feltWidth,
   );
   const context = canvas.getContext("2d");
   if (context === null) {
@@ -348,14 +379,21 @@ export function createFeltLayoutTexture(
     context,
     width: canvas.width,
     height: canvas.height,
-    pixelsPerMetre: canvas.width / TABLE_SIZE.width,
+    pixelsPerMetre: canvas.width / feltWidth,
   };
 
   drawFeltBase(draw, theme);
 
+  // One spot list for the whole table: the payout labels come from the rule
+  // data, and every seat prints the same geometry.
+  const betSpots = buildSeatBetSpots(
+    theme.tableRules.tiePayout,
+    theme.tableRules.commission,
+  );
+
   const seatPlacements = computeSeatPlacements(variant);
   for (const seat of seatPlacements) {
-    drawSeatBlock(draw, theme, seat.label, seat.x, seat.z, seat.facingRadians);
+    drawSeatBlock(draw, theme, seat, betSpots);
   }
 
   if (theme.tableRules.commission) {

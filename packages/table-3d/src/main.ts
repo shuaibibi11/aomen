@@ -1,6 +1,7 @@
 /**
  * Entry point: mount the preview scene and wire the control panel.
  */
+import * as THREE from "three";
 import {
   buildTableViews,
   CASINO_IDS,
@@ -10,6 +11,12 @@ import {
   type TableViewId,
 } from "./scene/preview-app.js";
 import { getCasinoTheme, type CasinoId } from "./specs/casino-theme.js";
+import {
+  computePlayerBoxPosition,
+  computeSeatPlacements,
+  FELT_DEALER_EDGE_Z,
+  FELT_INSET,
+} from "./specs/table-layout.js";
 
 function requireElement<T extends HTMLElement>(elementId: string): T {
   const element = document.getElementById(elementId);
@@ -92,6 +99,43 @@ function main(): void {
   turntableToggle.addEventListener("change", () => {
     previewApp.setTurntable(turntableToggle.checked);
   });
+
+  exposeVerificationHook(previewApp);
+}
+
+/**
+ * Expose the live scene and layout maths for the felt-mapping verifier.
+ *
+ * The unit tests can only check that the layout module agrees with itself. The
+ * step from a world position to a texture pixel runs through geometry UVs and
+ * Three.js texture sampling, so it can only be checked against a real renderer.
+ * `tools/verify-felt-mapping.mjs` raycasts through this hook to confirm printed
+ * ink actually lands where the layout says it should.
+ */
+function exposeVerificationHook(previewApp: PreviewApp): void {
+  const debugHandle: TableDebugHandle = {
+    THREE,
+    scene: previewApp.sceneGraph,
+    layout: {
+      FELT_INSET,
+      FELT_DEALER_EDGE_Z,
+      computeSeatPlacements,
+      computePlayerBoxPosition,
+    },
+  };
+  (window as unknown as { __tableDebug: TableDebugHandle }).__tableDebug =
+    debugHandle;
+}
+
+interface TableDebugHandle {
+  readonly THREE: typeof THREE;
+  readonly scene: THREE.Scene;
+  readonly layout: {
+    readonly FELT_INSET: typeof FELT_INSET;
+    readonly FELT_DEALER_EDGE_Z: number;
+    readonly computeSeatPlacements: typeof computeSeatPlacements;
+    readonly computePlayerBoxPosition: typeof computePlayerBoxPosition;
+  };
 }
 
 main();

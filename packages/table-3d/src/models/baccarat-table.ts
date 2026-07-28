@@ -9,6 +9,7 @@ import * as THREE from "three";
 import type { CasinoId, CasinoTheme } from "../specs/casino-theme.js";
 import { millimetresToMetres } from "../specs/dimensions.js";
 import {
+  computePlayerBoxPosition,
   computeSeatPlacements,
   DEALER_STATION_LAYOUT,
   TABLE_SIZE,
@@ -225,13 +226,10 @@ function buildDemoBets(
       count: chipCount,
     });
 
-    // Nudge the stack towards the guest so it lands in the PLAYER box.
-    const towardsGuest = millimetresToMetres(52);
-    stack.position.set(
-      seat.x + Math.sin(seat.facingRadians) * towardsGuest,
-      0,
-      seat.z + Math.cos(seat.facingRadians) * towardsGuest,
-    );
+    // Land the stack in the printed PLAYER box, using the same rotation the
+    // felt texture used to draw that box.
+    const playerBox = computePlayerBoxPosition(seat);
+    stack.position.set(playerBox.x, 0, playerBox.z);
     bets.add(stack);
   });
 

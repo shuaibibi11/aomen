@@ -8,10 +8,18 @@
 import { describe, expect, it } from "vitest";
 import {
   BIG_TABLE_SEAT_LABELS,
+  computeBetSpotPosition,
+  computeFeltGuestEdgeZ,
+  computePlayerBoxPosition,
   computeSeatPlacements,
   DEALER_STATION_LAYOUT,
+  FELT_DEALER_EDGE_Z,
+  FELT_INSET,
   getSeatLabels,
   MASS_SEAT_LABELS,
+  SEAT_BLOCK,
+  SEAT_BLOCK_DEALER_REACH,
+  SEAT_BLOCK_GUEST_REACH,
   TABLE_DIMENSIONS_MM,
   TABLE_SIZE,
   VIP_SEAT_LABELS,
@@ -119,5 +127,116 @@ describe("seat placement on the guest arc", () => {
       expect(Math.abs(seat.x)).toBeLessThan(TABLE_SIZE.width / 2);
       expect(seat.z).toBeLessThan(TABLE_SIZE.depth);
     }
+  });
+});
+
+/**
+ * The printed block has to sit on the cloth, not on the padded rail. These are
+ * the tests that caught the seat arc being too large for the felt.
+ */
+describe("printed seat blocks fit on the felt", () => {
+  it("insets the felt from the table outline on every side", () => {
+    expect(FELT_INSET.halfWidth).toBeLessThan(TABLE_SIZE.width / 2);
+    expect(FELT_INSET.depth).toBeLessThan(TABLE_SIZE.depth);
+  });
+
+  it("puts the felt dealer edge on the dealer side of the centre line", () => {
+    expect(FELT_DEALER_EDGE_Z).toBeLessThan(0);
+  });
+
+  it("reaches furthest towards the guest at the centre of the arc", () => {
+    expect(computeFeltGuestEdgeZ(0)).toBeGreaterThan(
+      computeFeltGuestEdgeZ(FELT_INSET.halfWidth * 0.9),
+    );
+  });
+
+  for (const variant of ["mass", "vip"] as const) {
+    it(`keeps the guest edge of every ${variant} block on the cloth`, () => {
+      for (const seat of computeSeatPlacements(variant)) {
+        const feltEdgeZ = computeFeltGuestEdgeZ(seat.x);
+        expect(seat.z + SEAT_BLOCK_GUEST_REACH).toBeLessThan(feltEdgeZ);
+      }
+    });
+
+    it(`keeps the dealer edge of every ${variant} block on the cloth`, () => {
+      for (const seat of computeSeatPlacements(variant)) {
+        expect(seat.z - SEAT_BLOCK_DEALER_REACH).toBeGreaterThan(
+          FELT_DEALER_EDGE_Z,
+        );
+      }
+    });
+
+    it(`keeps every ${variant} block within the felt half-width`, () => {
+      for (const seat of computeSeatPlacements(variant)) {
+        const blockHalfWidth = SEAT_BLOCK.boxWidth / 2;
+        expect(Math.abs(seat.x) + blockHalfWidth).toBeLessThan(
+          FELT_INSET.halfWidth,
+        );
+      }
+    });
+  }
+
+  it("does not overlap neighbouring blocks", () => {
+    const seats = computeSeatPlacements("mass");
+    for (let seatIndex = 1; seatIndex < seats.length; seatIndex += 1) {
+      const previousSeat = seats[seatIndex - 1];
+      const currentSeat = seats[seatIndex];
+      if (previousSeat === undefined || currentSeat === undefined) {
+        continue;
+      }
+      const centreSpacing = Math.hypot(
+        currentSeat.x - previousSeat.x,
+        currentSeat.z - previousSeat.z,
+      );
+      expect(centreSpacing).toBeGreaterThan(SEAT_BLOCK.boxWidth);
+    }
+  });
+});
+
+describe("player box positions", () => {
+  /**
+   * The seat position marks the guest edge of the printed block, so every spot
+   * sits inwards from it. PLAYER is the nearest betting box to the guest, so it
+   * must be inside the seat edge but still outside BANKER.
+   */
+  it("sits just inside the seat's guest edge", () => {
+    for (const seat of computeSeatPlacements("mass")) {
+      const playerBox = computePlayerBoxPosition(seat);
+      expect(playerBox.z).toBeLessThan(seat.z);
+    }
+  });
+
+  it("sits closer to the guest than the banker box", () => {
+    for (const seat of computeSeatPlacements("mass")) {
+      const playerBox = computeBetSpotPosition(seat, "player");
+      const bankerBox = computeBetSpotPosition(seat, "banker");
+      expect(playerBox.z).toBeGreaterThan(bankerBox.z);
+    }
+  });
+
+  it("keeps tie furthest from the guest of the three main bets", () => {
+    for (const seat of computeSeatPlacements("mass")) {
+      const bankerBox = computeBetSpotPosition(seat, "banker");
+      const tieBox = computeBetSpotPosition(seat, "tie");
+      expect(tieBox.z).toBeLessThan(bankerBox.z);
+    }
+  });
+
+  it("stays on the cloth", () => {
+    for (const seat of computeSeatPlacements("mass")) {
+      const playerBox = computePlayerBoxPosition(seat);
+      expect(playerBox.z).toBeLessThan(computeFeltGuestEdgeZ(playerBox.x));
+      expect(Math.abs(playerBox.x)).toBeLessThan(FELT_INSET.halfWidth);
+    }
+  });
+
+  it("shifts outer boxes laterally because their blocks are rotated", () => {
+    const seats = computeSeatPlacements("mass");
+    const rightSeat = seats[seats.length - 1];
+    expect(rightSeat).toBeDefined();
+    if (rightSeat === undefined) {
+      return;
+    }
+    expect(computePlayerBoxPosition(rightSeat).x).toBeLessThan(rightSeat.x);
   });
 });

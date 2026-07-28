@@ -1,43 +1,56 @@
 /**
- * Kidney-shaped baccarat table body: felt surface, padded rail, apron and legs.
+ * Kidney-shaped baccarat table body: felt surface, padded ring rail, apron
+ * and legs.
  *
- * The outline is a closed curve, flat along the dealer edge and bowed outwards
- * along the guest edge. Felt and rail are built from the same outline at two
- * scales so the rail always follows the felt exactly.
+ * Orientation: dealer edge at -Z (positive Y in the outline), guest arc at
+ * +Z (negative Y in the outline). After rotateX(-π/2) the Y axis maps to -Z,
+ * so positive outline-Y becomes negative world-Z (dealer side) and negative
+ * outline-Y becomes positive world-Z (guest side).
  */
 import * as THREE from "three";
 import type { CasinoTheme } from "../specs/casino-theme.js";
 import { millimetresToMetres } from "../specs/dimensions.js";
-import { TABLE_SIZE } from "../specs/table-layout.js";
+import {
+  computeOutlineWaist,
+  FELT_INSET,
+  OUTLINE_DEALER_DEPTH_RATIO,
+  TABLE_SIZE,
+} from "../specs/table-layout.js";
 
 const OUTLINE_SEGMENTS = 96;
 
 /**
- * Build the table outline in the XZ plane, returned as 2D points in XY for
- * shape extrusion. The dealer edge is flat at negative Y; the guest edge bows
- * out to positive Y, waisted slightly at the ends so it reads as a kidney
- * rather than a plain half-ellipse.
+ * Build the table outline in the XY plane.
+ *   +Y  →  dealer edge   (flat, maps to -Z after rotation)
+ *   -Y  →  guest arc far (maps to +Z after rotation)
+ *
+ * The waist factor pulls in near the dealer corners so the profile looks like a
+ * kidney rather than a plain half-ellipse.
  */
-function buildTableOutlinePoints(
+export function buildTableOutlinePoints(
   halfWidth: number,
   depth: number,
 ): THREE.Vector2[] {
   const points: THREE.Vector2[] = [];
-  const dealerEdgeY = -depth * 0.34;
+  // The dealer edge sits at +34% of the depth, so the guest apex reaches the
+  // remaining 66% on the other side of the centre line and the outline spans
+  // the full declared depth.
+  const dealerEdgeY = depth * OUTLINE_DEALER_DEPTH_RATIO;
 
-  // Guest arc, swept from the right end round to the left end.
+  // Guest arc from right to left (x: +halfWidth → -halfWidth)
   for (let step = 0; step <= OUTLINE_SEGMENTS; step += 1) {
     const progress = step / OUTLINE_SEGMENTS;
     const angle = progress * Math.PI;
-    const x = halfWidth * Math.cos(angle);
+    const normalisedX = Math.cos(angle);
+    const x = halfWidth * normalisedX;
 
-    // Waist factor pulls the curve in near the ends, giving the kidney profile.
-    const waist = 1 - 0.18 * Math.cos(angle) ** 2;
-    const y = dealerEdgeY + depth * Math.sin(angle) * waist;
+    const y =
+      dealerEdgeY
+      - depth * Math.sin(angle) * computeOutlineWaist(normalisedX);
     points.push(new THREE.Vector2(x, y));
   }
 
-  // Flat dealer edge, closing the outline back to the start.
+  // Flat dealer edge closes the shape
   points.push(new THREE.Vector2(-halfWidth, dealerEdgeY));
   points.push(new THREE.Vector2(halfWidth, dealerEdgeY));
 
@@ -49,10 +62,40 @@ function buildOutlineShape(halfWidth: number, depth: number): THREE.Shape {
 }
 
 /**
- * Extrude an outline into a slab lying in the XZ plane, with UVs remapped so a
- * printed layout texture covers the whole footprint.
+ * Build the table outline as a ring: outer rail profile with the felt area cut
+ * out as a hole. This lets the felt surface (which sits slightly higher) show
+ * through rather than being buried under a solid slab.
  */
-function buildSlabFromOutline(
+function buildRailRingGeometry(
+  outerHalfWidth: number,
+  outerDepth: number,
+  innerHalfWidth: number,
+  innerDepth: number,
+  thickness: number,
+): THREE.ExtrudeGeometry {
+  const outerShape = buildOutlineShape(outerHalfWidth, outerDepth);
+
+  // Inner hole must wind in the opposite direction so Three.js subtracts it.
+  const innerPoints = buildTableOutlinePoints(innerHalfWidth, innerDepth);
+  innerPoints.reverse();
+  const holePath = new THREE.Path(innerPoints);
+  outerShape.holes.push(holePath);
+
+  const geometry = new THREE.ExtrudeGeometry(outerShape, {
+    depth: thickness,
+    bevelEnabled: false,
+    curveSegments: 12,
+  });
+  geometry.rotateX(-Math.PI / 2);
+  return geometry;
+}
+
+/**
+ * Build the flat felt slab whose top face carries the printed layout texture.
+ * UVs are remapped from the XY bounding box so the texture covers the entire
+ * footprint at a predictable scale.
+ */
+export function buildFeltGeometry(
   halfWidth: number,
   depth: number,
   thickness: number,
@@ -80,7 +123,6 @@ function buildSlabFromOutline(
     uvAttribute.needsUpdate = true;
   }
 
-  // Lay the slab flat: the outline is authored in XY.
   geometry.rotateX(-Math.PI / 2);
   return geometry;
 }
@@ -91,10 +133,6 @@ export interface TableBodyOptions {
   readonly layoutTexture: THREE.Texture;
 }
 
-/**
- * Build the complete table body. The felt sits on top of a rail ring, which
- * sits on an apron and four legs.
- */
 export function createTableBody(options: TableBodyOptions): THREE.Group {
   const { theme, layoutTexture } = options;
   const table = new THREE.Group();
@@ -103,30 +141,33 @@ export function createTableBody(options: TableBodyOptions): THREE.Group {
   const halfWidth = TABLE_SIZE.width / 2;
   const depth = TABLE_SIZE.depth;
   const surfaceHeight = TABLE_SIZE.surfaceHeight;
-  const railWidth = TABLE_SIZE.railWidth;
+  const railRise = TABLE_SIZE.railRise;
 
-  // Rail ring: the same outline at full size, standing proud of the felt.
-  const railGeometry = buildSlabFromOutline(
+  const feltHalfWidth = FELT_INSET.halfWidth;
+  const feltDepth = FELT_INSET.depth;
+
+  // --- Ring-shaped padded rail (felt area is a hole) ---
+  const railRingGeometry = buildRailRingGeometry(
     halfWidth,
     depth,
-    TABLE_SIZE.railRise + millimetresToMetres(6),
+    feltHalfWidth,
+    feltDepth,
+    railRise + millimetresToMetres(6),
   );
   const railMaterial = new THREE.MeshStandardMaterial({
     color: theme.palette.rail,
     roughness: 0.42,
     metalness: 0.24,
   });
-  const rail = new THREE.Mesh(railGeometry, railMaterial);
+  const rail = new THREE.Mesh(railRingGeometry, railMaterial);
   rail.name = "table-rail";
   rail.position.y = surfaceHeight;
   rail.castShadow = true;
   rail.receiveShadow = true;
   table.add(rail);
 
-  // Felt surface: the outline inset by the rail width, sitting on top.
-  const feltHalfWidth = halfWidth - railWidth;
-  const feltDepth = depth - railWidth * 1.15;
-  const feltGeometry = buildSlabFromOutline(
+  // --- Felt slab with printed layout on top ---
+  const feltGeometry = buildFeltGeometry(
     feltHalfWidth,
     feltDepth,
     millimetresToMetres(3),
@@ -138,13 +179,13 @@ export function createTableBody(options: TableBodyOptions): THREE.Group {
   });
   const felt = new THREE.Mesh(feltGeometry, feltMaterial);
   felt.name = "table-felt";
-  felt.position.y = surfaceHeight + TABLE_SIZE.railRise;
+  felt.position.y = surfaceHeight + railRise;
   felt.receiveShadow = true;
   table.add(felt);
 
-  // Apron: a shallower copy of the outline forming the visible table body.
+  // --- Apron (visible table body below the surface) ---
   const apronHeight = millimetresToMetres(140);
-  const apronGeometry = buildSlabFromOutline(
+  const apronGeometry = buildFeltGeometry(
     halfWidth - millimetresToMetres(20),
     depth - millimetresToMetres(24),
     apronHeight,
@@ -168,11 +209,12 @@ export function createTableBody(options: TableBodyOptions): THREE.Group {
     widthMm: 2400,
     depthMm: 1400,
     surfaceHeightMm: 760,
+    feltHalfWidth,
+    feltDepth,
   };
   return table;
 }
 
-/** Four tapered legs, inset from the table edge. */
 function buildTableLegs(theme: CasinoTheme, legHeight: number): THREE.Group {
   const legs = new THREE.Group();
   legs.name = "table-legs";
@@ -198,7 +240,7 @@ function buildTableLegs(theme: CasinoTheme, legHeight: number): THREE.Group {
   for (const xSign of [-1, 1]) {
     for (const zSign of [-1, 1]) {
       const leg = new THREE.Mesh(legGeometry, legMaterial);
-      leg.name = `table-leg-${xSign > 0 ? "right" : "left"}-${zSign > 0 ? "guest" : "dealer"}`;
+      leg.name = `leg-${xSign > 0 ? "R" : "L"}-${zSign > 0 ? "guest" : "dealer"}`;
       leg.position.set(xSign * legOffsetX, legHeight / 2, zSign * legOffsetZ);
       leg.castShadow = true;
       leg.receiveShadow = true;

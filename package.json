@@ -1,0 +1,16 @@
+{
+  "name": "macau-casino-training",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Macau casino dealer training system — monorepo root.",
+  "packageManager": "pnpm@10.29.3",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" run build",
+    "test": "pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" run test",
+    "typecheck": "pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" run typecheck"
+  }
+}
