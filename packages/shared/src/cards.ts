@@ -20,6 +20,15 @@ export interface Card {
   readonly suit: Suit;
 }
 
+/** Cards in one standard deck: 13 ranks across 4 suits. */
+export const CARDS_PER_DECK = RANKS.length * SUITS.length;
+
+/** Decks in a standard baccarat shoe. */
+export const DECKS_PER_SHOE = 8;
+
+/** Cards in a full eight-deck baccarat shoe. */
+export const CARDS_PER_SHOE = CARDS_PER_DECK * DECKS_PER_SHOE;
+
 /**
  * Baccarat point value of a single card.
  *

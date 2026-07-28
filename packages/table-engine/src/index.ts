@@ -5,3 +5,5 @@
  * barrel re-exports the pieces as they are built (draw table first).
  */
 export * from "./baccarat/draw-table.js";
+export * from "./baccarat/shoe.js";
+export * from "./rng.js";
