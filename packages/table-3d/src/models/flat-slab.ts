@@ -52,46 +52,87 @@ export function remapExtrudeCapUvs(
   uvAttribute.needsUpdate = true;
 }
 
-/**
- * ExtrudeGeometry writes both flat caps before the side wall. Counting the
- * leading run of triangles whose vertices share one Z value gives the split
- * point between caps and wall.
- */
-function countCapIndices(geometry: THREE.ExtrudeGeometry): number {
-  const index = geometry.index;
-  if (index === null) {
-    return 0;
-  }
-  const positionAttribute = geometry.getAttribute("position");
+/** Material slot for each face of the slab. */
+const FRONT_MATERIAL_SLOT = 0;
+const BACK_MATERIAL_SLOT = 1;
+const EDGE_MATERIAL_SLOT = 2;
 
-  let capIndexCount = 0;
-  for (let triangleStart = 0; triangleStart < index.count; triangleStart += 3) {
-    const firstZ = positionAttribute.getZ(index.getX(triangleStart));
-    const secondZ = positionAttribute.getZ(index.getX(triangleStart + 1));
-    const thirdZ = positionAttribute.getZ(index.getX(triangleStart + 2));
-    const isFlat =
-      Math.abs(firstZ - secondZ) < 1e-9 && Math.abs(secondZ - thirdZ) < 1e-9;
-    if (!isFlat) {
-      break;
+/**
+ * Classify one triangle by the Z values of its three vertices: a triangle
+ * sitting entirely at the front or back extreme is a cap, anything else is
+ * part of the side wall.
+ */
+function classifyTriangle(
+  positionAttribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+  firstVertexIndex: number,
+  frontZ: number,
+  backZ: number,
+): number {
+  const tolerance = 1e-6;
+  let atFrontCount = 0;
+  let atBackCount = 0;
+
+  for (let vertexOffset = 0; vertexOffset < 3; vertexOffset += 1) {
+    const vertexZ = positionAttribute.getZ(firstVertexIndex + vertexOffset);
+    if (Math.abs(vertexZ - frontZ) < tolerance) {
+      atFrontCount += 1;
+    } else if (Math.abs(vertexZ - backZ) < tolerance) {
+      atBackCount += 1;
     }
-    capIndexCount += 3;
   }
-  return capIndexCount;
+
+  if (atFrontCount === 3) {
+    return FRONT_MATERIAL_SLOT;
+  }
+  if (atBackCount === 3) {
+    return BACK_MATERIAL_SLOT;
+  }
+  return EDGE_MATERIAL_SLOT;
 }
 
 /**
  * Split the geometry into three material groups: front cap, back cap and the
  * side wall, so each can carry its own material.
+ *
+ * ExtrudeGeometry produces non-indexed geometry, so groups are expressed as
+ * ranges over the position attribute rather than over an index buffer. Runs of
+ * consecutive triangles with the same classification are merged into one group
+ * to keep the draw-call count low.
  */
 export function assignFrontBackEdgeGroups(geometry: THREE.ExtrudeGeometry): void {
-  const totalIndexCount = geometry.index?.count ?? 0;
-  const capIndexCount = countCapIndices(geometry);
-  const halfCapIndexCount = capIndexCount / 2;
+  const positionAttribute = geometry.getAttribute("position");
+  const vertexCount = positionAttribute.count;
+  if (vertexCount === 0) {
+    return;
+  }
+
+  let frontZ = Number.NEGATIVE_INFINITY;
+  let backZ = Number.POSITIVE_INFINITY;
+  for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex += 1) {
+    const vertexZ = positionAttribute.getZ(vertexIndex);
+    frontZ = Math.max(frontZ, vertexZ);
+    backZ = Math.min(backZ, vertexZ);
+  }
 
   geometry.clearGroups();
-  geometry.addGroup(0, halfCapIndexCount, 0);
-  geometry.addGroup(halfCapIndexCount, halfCapIndexCount, 1);
-  geometry.addGroup(capIndexCount, totalIndexCount - capIndexCount, 2);
+
+  let runStartVertex = 0;
+  let runMaterialSlot = classifyTriangle(positionAttribute, 0, frontZ, backZ);
+
+  for (let vertexIndex = 3; vertexIndex < vertexCount; vertexIndex += 3) {
+    const materialSlot = classifyTriangle(
+      positionAttribute,
+      vertexIndex,
+      frontZ,
+      backZ,
+    );
+    if (materialSlot !== runMaterialSlot) {
+      geometry.addGroup(runStartVertex, vertexIndex - runStartVertex, runMaterialSlot);
+      runStartVertex = vertexIndex;
+      runMaterialSlot = materialSlot;
+    }
+  }
+  geometry.addGroup(runStartVertex, vertexCount - runStartVertex, runMaterialSlot);
 }
 
 /**

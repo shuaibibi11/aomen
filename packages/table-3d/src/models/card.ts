@@ -15,52 +15,9 @@ import {
   type CardRank,
   type CardSuit,
 } from "../textures/card-textures.js";
+import { buildFlatSlabGeometry } from "./flat-slab.js";
 
 const CORNER_CURVE_SEGMENTS = 6;
-
-/**
- * Build the card outline centred on the origin, with the four corners rounded
- * to the real corner radius.
- */
-function buildCardOutline(): THREE.Shape {
-  const halfWidth = CARD_SIZE.width / 2;
-  const halfHeight = CARD_SIZE.height / 2;
-  const radius = CARD_SIZE.cornerRadius;
-
-  const outline = new THREE.Shape();
-  outline.moveTo(-halfWidth + radius, -halfHeight);
-  outline.lineTo(halfWidth - radius, -halfHeight);
-  outline.quadraticCurveTo(halfWidth, -halfHeight, halfWidth, -halfHeight + radius);
-  outline.lineTo(halfWidth, halfHeight - radius);
-  outline.quadraticCurveTo(halfWidth, halfHeight, halfWidth - radius, halfHeight);
-  outline.lineTo(-halfWidth + radius, halfHeight);
-  outline.quadraticCurveTo(-halfWidth, halfHeight, -halfWidth, halfHeight - radius);
-  outline.lineTo(-halfWidth, -halfHeight + radius);
-  outline.quadraticCurveTo(-halfWidth, -halfHeight, -halfWidth + radius, -halfHeight);
-  return outline;
-}
-
-/**
- * Extrusion UVs default to world-space, which stretches the artwork. This
- * remaps the front and back caps to the 0..1 range of the card outline.
- */
-function remapCapUvs(geometry: THREE.ExtrudeGeometry): void {
-  const positionAttribute = geometry.getAttribute("position");
-  const uvAttribute = geometry.getAttribute("uv");
-  const halfWidth = CARD_SIZE.width / 2;
-  const halfHeight = CARD_SIZE.height / 2;
-
-  for (let vertexIndex = 0; vertexIndex < positionAttribute.count; vertexIndex += 1) {
-    const x = positionAttribute.getX(vertexIndex);
-    const y = positionAttribute.getY(vertexIndex);
-    uvAttribute.setXY(
-      vertexIndex,
-      (x + halfWidth) / CARD_SIZE.width,
-      (y + halfHeight) / CARD_SIZE.height,
-    );
-  }
-  uvAttribute.needsUpdate = true;
-}
 
 export interface CardModelOptions {
   readonly theme: CasinoTheme;
@@ -76,13 +33,13 @@ export interface CardModelOptions {
 export function createCardModel(options: CardModelOptions): THREE.Mesh {
   const { theme, casinoId, rank, suit } = options;
 
-  const geometry = new THREE.ExtrudeGeometry(buildCardOutline(), {
-    depth: CARD_SIZE.thickness,
-    bevelEnabled: false,
-    curveSegments: CORNER_CURVE_SEGMENTS,
-  });
-  geometry.center();
-  remapCapUvs(geometry);
+  const geometry = buildFlatSlabGeometry(
+    CARD_SIZE.width,
+    CARD_SIZE.height,
+    CARD_SIZE.thickness,
+    CARD_SIZE.cornerRadius,
+    CORNER_CURVE_SEGMENTS,
+  );
 
   const faceTexture = createCardFaceTexture(theme, rank, suit);
   const backTexture = createCardBackTexture(theme, getCasinoMonogram(casinoId));
@@ -105,16 +62,6 @@ export function createCardModel(options: CardModelOptions): THREE.Mesh {
     metalness: 0,
   });
 
-  // ExtrudeGeometry emits group 0 for the caps and group 1 for the wall. The
-  // caps are split so the front and back can carry different artwork.
-  geometry.clearGroups();
-  const indexCount = geometry.index?.count ?? 0;
-  const capTriangleCount = countCapIndices(geometry);
-  const halfCap = capTriangleCount / 2;
-  geometry.addGroup(0, halfCap, 0);
-  geometry.addGroup(halfCap, halfCap, 1);
-  geometry.addGroup(capTriangleCount, indexCount - capTriangleCount, 2);
-
   const card = new THREE.Mesh(geometry, [faceMaterial, backMaterial, edgeMaterial]);
   card.name = `card-${casinoId}-${rank}${suit}`;
   card.castShadow = true;
@@ -125,33 +72,6 @@ export function createCardModel(options: CardModelOptions): THREE.Mesh {
 
   card.userData = { kind: "card", casinoId, rank, suit };
   return card;
-}
-
-/**
- * ExtrudeGeometry writes both caps before the side wall. Cap triangles are the
- * ones whose vertices share a single Z value, so counting them gives the split
- * point between the caps and the wall.
- */
-function countCapIndices(geometry: THREE.ExtrudeGeometry): number {
-  const index = geometry.index;
-  const positionAttribute = geometry.getAttribute("position");
-  if (index === null) {
-    return 0;
-  }
-
-  let capIndexCount = 0;
-  for (let triangleStart = 0; triangleStart < index.count; triangleStart += 3) {
-    const firstZ = positionAttribute.getZ(index.getX(triangleStart));
-    const secondZ = positionAttribute.getZ(index.getX(triangleStart + 1));
-    const thirdZ = positionAttribute.getZ(index.getX(triangleStart + 2));
-    const isFlatTriangle =
-      Math.abs(firstZ - secondZ) < 1e-9 && Math.abs(secondZ - thirdZ) < 1e-9;
-    if (!isFlatTriangle) {
-      break;
-    }
-    capIndexCount += 3;
-  }
-  return capIndexCount;
 }
 
 export interface CardHandOptions {
