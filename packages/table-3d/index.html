@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>澳門賭場訓練系統 · 籌碼與撲克 3D 預覽</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #06060A;
+    color: #E7E4DB;
+    font-family: 'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', system-ui, sans-serif;
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    grid-template-rows: auto 1fr;
+  }
+  header {
+    grid-column: 1 / -1;
+    padding: 16px 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header h1 { margin: 0; font-size: 18px; letter-spacing: 1px; }
+  header .sub { font-size: 12.5px; opacity: 0.6; }
+  header .warn {
+    margin-left: auto;
+    font-size: 11.5px;
+    padding: 4px 10px;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 120, 120, 0.4);
+    background: rgba(255, 70, 70, 0.1);
+  }
+  #viewport { display: block; width: 100%; height: 100%; }
+  aside {
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 20px;
+    overflow-y: auto;
+  }
+  aside h2 {
+    margin: 0 0 10px;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    opacity: 0.5;
+  }
+  aside section + section { margin-top: 26px; }
+  .options { display: flex; flex-direction: column; gap: 6px; }
+  .options button {
+    text-align: left;
+    padding: 8px 11px;
+    font-size: 13px;
+    font-family: inherit;
+    color: inherit;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .options button:hover { border-color: rgba(255, 255, 255, 0.32); }
+  .options button[aria-pressed="true"] {
+    background: rgba(201, 164, 76, 0.16);
+    border-color: #C9A44C;
+  }
+  dl#spec-readout {
+    margin: 0;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 12px;
+    font-size: 12.5px;
+  }
+  dl#spec-readout dt { opacity: 0.55; white-space: nowrap; }
+  dl#spec-readout dd { margin: 0; }
+  label.toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .hint { font-size: 12px; opacity: 0.5; line-height: 1.6; }
+  @media (max-width: 860px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 60vh auto; }
+    aside { border-left: none; border-top: 1px solid rgba(255, 255, 255, 0.1); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>籌碼與撲克 · 程序化 3D 模型</h1>
+  <span class="sub">真實尺寸驅動 · 六場館主題</span>
+  <span class="warn">仿真訓練 · 非官方授權 · 訓練幣</span>
+</header>
+
+<canvas id="viewport"></canvas>
+
+<aside>
+  <section>
+    <h2>預覽內容</h2>
+    <div class="options" id="mode-options"></div>
+  </section>
+
+  <section>
+    <h2>場館主題</h2>
+    <div class="options" id="casino-options"></div>
+  </section>
+
+  <section>
+    <h2>視圖</h2>
+    <label class="toggle">
+      <input type="checkbox" id="turntable-toggle" checked />
+      自動旋轉
+    </label>
+    <p class="hint">拖曳旋轉視角，滾輪縮放。幾何以毫米級真實尺寸建模，場景單位為公尺。</p>
+  </section>
+
+  <section>
+    <h2>規格</h2>
+    <dl id="spec-readout"></dl>
+  </section>
+
+  <section>
+    <h2>渲染狀態</h2>
+    <p class="hint" id="render-diagnostics">尚未渲染</p>
+  </section>
+</aside>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "name": "@mct/table-3d",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Procedural Three.js models for baccarat chips and playing cards, driven by per-casino theme data.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "three": "0.185.1"
+  },
+  "devDependencies": {
+    "@types/three": "0.185.0",
+    "typescript": "5.7.3",
+    "vite": "6.0.7",
+    "vitest": "3.0.5"
+  }
+}

@@ -1,0 +1,373 @@
+/**
+ * Interactive preview scene for the procedural chip and card models.
+ *
+ * The scene exists to verify geometry and materials against the SVG design
+ * sheets. It is not the training table: the table scene will import the same
+ * model factories.
+ */
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import {
+  CASINO_IDS,
+  getCasinoTheme,
+  type CasinoId,
+  type CasinoTheme,
+} from "../specs/casino-theme.js";
+import {
+  CARD_DIMENSIONS_MM,
+  CHIP_DIMENSIONS_MM,
+  CHIP_STACK_COUNT,
+} from "../specs/dimensions.js";
+import { createChipModel, createChipStack } from "../models/chip.js";
+import { createCardHand, createCardModel } from "../models/card.js";
+import type { CardRank, CardSuit } from "../textures/card-textures.js";
+
+type PreviewMode = "chip-set" | "chip-stacks" | "card-faces" | "dealt-hand";
+
+const PREVIEW_MODE_LABELS: Record<PreviewMode, string> = {
+  "chip-set": "籌碼全套 Chip set",
+  "chip-stacks": "碼堆 Chip stacks",
+  "card-faces": "撲克牌面 Card faces",
+  "dealt-hand": "發牌手牌 Dealt hand",
+};
+
+const SAMPLE_HAND: ReadonlyArray<{ rank: CardRank; suit: CardSuit }> = [
+  { rank: "9", suit: "heart" },
+  { rank: "K", suit: "spade" },
+  { rank: "4", suit: "diamond" },
+];
+
+const SAMPLE_FACES: ReadonlyArray<{ rank: CardRank; suit: CardSuit }> = [
+  { rank: "A", suit: "spade" },
+  { rank: "7", suit: "heart" },
+  { rank: "10", suit: "diamond" },
+  { rank: "Q", suit: "club" },
+];
+
+export class PreviewApp {
+  private readonly renderer: THREE.WebGLRenderer;
+  private readonly scene: THREE.Scene;
+  private readonly camera: THREE.PerspectiveCamera;
+  private readonly controls: OrbitControls;
+  private readonly contentGroup = new THREE.Group();
+
+  private activeCasinoId: CasinoId = "sands-venetian";
+  private activeMode: PreviewMode = "chip-set";
+  private turntableEnabled = true;
+
+  constructor(private readonly canvas: HTMLCanvasElement) {
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: false,
+    });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
+
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color("#0A0A0E");
+
+    this.camera = new THREE.PerspectiveCamera(38, 1, 0.01, 20);
+    this.camera.position.set(0.16, 0.17, 0.26);
+
+    this.controls = new OrbitControls(this.camera, canvas);
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.07;
+    this.controls.minDistance = 0.06;
+    this.controls.maxDistance = 1.2;
+    this.controls.target.set(0, 0.012, 0);
+
+    this.scene.add(this.contentGroup);
+    this.buildLighting();
+    this.buildFeltSurface();
+    this.rebuildContent();
+
+    window.addEventListener("resize", () => this.handleResize());
+    this.handleResize();
+    this.renderer.setAnimationLoop(() => this.renderFrame());
+  }
+
+  /** Three-point studio setup: key, fill and a warm rim to read the gold. */
+  private buildLighting(): void {
+    this.scene.add(new THREE.AmbientLight("#ffffff", 0.55));
+
+    const keyLight = new THREE.DirectionalLight("#fff6e6", 2.6);
+    keyLight.position.set(0.22, 0.4, 0.24);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.set(1024, 1024);
+    keyLight.shadow.camera.near = 0.05;
+    keyLight.shadow.camera.far = 1.6;
+    keyLight.shadow.camera.left = -0.25;
+    keyLight.shadow.camera.right = 0.25;
+    keyLight.shadow.camera.top = 0.25;
+    keyLight.shadow.camera.bottom = -0.25;
+    keyLight.shadow.bias = -0.0004;
+    this.scene.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight("#dce6f0", 0.8);
+    fillLight.position.set(-0.3, 0.22, 0.1);
+    this.scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight("#ffd9a0", 1.1);
+    rimLight.position.set(-0.1, 0.16, -0.3);
+    this.scene.add(rimLight);
+  }
+
+  /** A felt disc so chips and cards are read against the table colour. */
+  private feltMesh: THREE.Mesh | null = null;
+
+  private buildFeltSurface(): void {
+    const geometry = new THREE.CircleGeometry(0.42, 72);
+    const material = new THREE.MeshStandardMaterial({
+      color: "#0E6045",
+      roughness: 0.96,
+      metalness: 0,
+    });
+    const felt = new THREE.Mesh(geometry, material);
+    felt.rotation.x = -Math.PI / 2;
+    felt.receiveShadow = true;
+    this.scene.add(felt);
+    this.feltMesh = felt;
+  }
+
+  private disposeContent(): void {
+    this.contentGroup.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) {
+        return;
+      }
+      child.geometry.dispose();
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      for (const material of materials) {
+        const standardMaterial = material as THREE.MeshStandardMaterial;
+        standardMaterial.map?.dispose();
+        standardMaterial.dispose();
+      }
+    });
+    this.contentGroup.clear();
+  }
+
+  private get activeTheme(): CasinoTheme {
+    return getCasinoTheme(this.activeCasinoId);
+  }
+
+  private rebuildContent(): void {
+    this.disposeContent();
+
+    const theme = this.activeTheme;
+    if (this.feltMesh !== null) {
+      (this.feltMesh.material as THREE.MeshStandardMaterial).color.set(
+        theme.palette.feltMain,
+      );
+    }
+
+    switch (this.activeMode) {
+      case "chip-set":
+        this.buildChipSet(theme);
+        break;
+      case "chip-stacks":
+        this.buildChipStacks(theme);
+        break;
+      case "card-faces":
+        this.buildCardFaces(theme);
+        break;
+      case "dealt-hand":
+        this.buildDealtHand(theme);
+        break;
+    }
+
+    this.updateInfoPanel();
+  }
+
+  /** All denominations laid out flat in a row, face up. */
+  private buildChipSet(theme: CasinoTheme): void {
+    const denominations = theme.chipDenominations;
+    const spacing = 0.046;
+    denominations.forEach((denomination, chipIndex) => {
+      const chip = createChipModel({
+        theme,
+        casinoId: this.activeCasinoId,
+        denomination,
+      });
+      chip.position.set(
+        (chipIndex - (denominations.length - 1) / 2) * spacing,
+        0.0017,
+        0,
+      );
+      this.contentGroup.add(chip);
+    });
+  }
+
+  /** One stack per denomination, at the real twenty-chip dealer count. */
+  private buildChipStacks(theme: CasinoTheme): void {
+    const denominations = theme.chipDenominations;
+    const spacing = 0.05;
+    denominations.forEach((denomination, stackIndex) => {
+      const stack = createChipStack({
+        theme,
+        casinoId: this.activeCasinoId,
+        denomination,
+        count: CHIP_STACK_COUNT,
+      });
+      stack.position.set(
+        (stackIndex - (denominations.length - 1) / 2) * spacing,
+        0,
+        0,
+      );
+      this.contentGroup.add(stack);
+    });
+  }
+
+  /** Sample faces plus one card turned to show the back engraving. */
+  private buildCardFaces(theme: CasinoTheme): void {
+    const spacing = 0.066;
+    const total = SAMPLE_FACES.length + 1;
+
+    SAMPLE_FACES.forEach((cardSpec, cardIndex) => {
+      const card = createCardModel({
+        theme,
+        casinoId: this.activeCasinoId,
+        rank: cardSpec.rank,
+        suit: cardSpec.suit,
+      });
+      card.position.set((cardIndex - (total - 1) / 2) * spacing, 0.0002, 0);
+      this.contentGroup.add(card);
+    });
+
+    const backCard = createCardModel({
+      theme,
+      casinoId: this.activeCasinoId,
+      rank: "A",
+      suit: "club",
+    });
+    backCard.position.set((total - 1 - (total - 1) / 2) * spacing, 0.0002, 0);
+    backCard.rotation.x = Math.PI / 2;
+    this.contentGroup.add(backCard);
+  }
+
+  /** A three-card hand with a small bet stack beside it. */
+  private buildDealtHand(theme: CasinoTheme): void {
+    const hand = createCardHand({
+      theme,
+      casinoId: this.activeCasinoId,
+      cards: SAMPLE_HAND,
+    });
+    hand.position.set(0, 0.0002, -0.02);
+    this.contentGroup.add(hand);
+
+    const betDenomination = theme.chipDenominations[2] ?? theme.chipDenominations[0] ?? 100;
+    const betStack = createChipStack({
+      theme,
+      casinoId: this.activeCasinoId,
+      denomination: betDenomination,
+      count: 6,
+    });
+    betStack.position.set(0, 0, 0.075);
+    this.contentGroup.add(betStack);
+  }
+
+  private handleResize(): void {
+    const width = this.canvas.clientWidth;
+    const height = this.canvas.clientHeight;
+    if (width === 0 || height === 0) {
+      return;
+    }
+    this.renderer.setSize(width, height, false);
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
+  }
+
+  private renderFrame(): void {
+    if (this.turntableEnabled) {
+      this.contentGroup.rotation.y += 0.0035;
+    }
+    this.controls.update();
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  setCasino(casinoId: CasinoId): void {
+    this.activeCasinoId = casinoId;
+    this.contentGroup.rotation.y = 0;
+    this.rebuildContent();
+  }
+
+  setMode(mode: PreviewMode): void {
+    this.activeMode = mode;
+    this.contentGroup.rotation.y = 0;
+    this.rebuildContent();
+  }
+
+  setTurntable(enabled: boolean): void {
+    this.turntableEnabled = enabled;
+  }
+
+  /** Write the current spec numbers into the side panel. */
+  private updateInfoPanel(): void {
+    const panel = document.getElementById("spec-readout");
+    if (panel === null) {
+      return;
+    }
+    const theme = this.activeTheme;
+    const rows: Array<[string, string]> = [
+      ["場館", theme.displayName],
+      ["模式", PREVIEW_MODE_LABELS[this.activeMode]],
+      [
+        "籌碼尺寸",
+        `⌀${CHIP_DIMENSIONS_MM.diameter} × ${CHIP_DIMENSIONS_MM.thickness} mm`,
+      ],
+      ["籌碼模具", theme.materials.chipMould],
+      ["邊緣嵌條", `${theme.materials.chipInserts} 條`],
+      [
+        "撲克尺寸",
+        `${CARD_DIMENSIONS_MM.width} × ${CARD_DIMENSIONS_MM.height} × ${CARD_DIMENSIONS_MM.thickness} mm`,
+      ],
+      ["牌背雕紋", theme.materials.cardEngrave],
+      ["碼堆單位", `${CHIP_STACK_COUNT} 枚`],
+      ["幣別", `${theme.tableRules.currency}（訓練幣）`],
+    ];
+    panel.innerHTML = rows
+      .map(([label, value]) => `<dt>${label}</dt><dd>${value}</dd>`)
+      .join("");
+
+    this.updateDiagnostics();
+  }
+
+  /**
+   * Report what the renderer actually produced. Screenshots alone cannot prove
+   * geometry reached the GPU, so the mesh and draw-call counts are surfaced in
+   * the page for verification.
+   */
+  private updateDiagnostics(): void {
+    const panel = document.getElementById("render-diagnostics");
+    if (panel === null) {
+      return;
+    }
+
+    let meshCount = 0;
+    let triangleCount = 0;
+    this.contentGroup.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) {
+        return;
+      }
+      meshCount += 1;
+      const index = child.geometry.getIndex();
+      const positionAttribute = child.geometry.getAttribute("position");
+      triangleCount += index !== null
+        ? index.count / 3
+        : (positionAttribute?.count ?? 0) / 3;
+    });
+
+    // Render once before reading counters so the values reflect this content.
+    this.renderer.render(this.scene, this.camera);
+    const renderInfo = this.renderer.info.render;
+
+    panel.textContent =
+      `模型網格 ${meshCount} · 三角面 ${Math.round(triangleCount)} · ` +
+      `繪製呼叫 ${renderInfo.calls}`;
+  }
+}
+
+export { CASINO_IDS, PREVIEW_MODE_LABELS };
+export type { PreviewMode };

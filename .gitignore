@@ -20,3 +20,7 @@ _seg*.txt
 _prog*.txt
 _retry*.txt
 _check*.txt
+
+# Vite build output and local dev logs
+packages/*/dist/
+dev-server*.log
