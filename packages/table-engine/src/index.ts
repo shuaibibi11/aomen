@@ -7,4 +7,5 @@
 export * from "./baccarat/draw-table.js";
 export * from "./baccarat/shoe.js";
 export * from "./baccarat/payout.js";
+export * from "./chip-ledger.js";
 export * from "./rng.js";
