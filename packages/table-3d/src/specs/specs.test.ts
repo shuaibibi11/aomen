@@ -9,9 +9,17 @@ import {
   CHIP_DIMENSIONS_MM,
   CHIP_SIZE,
   CHIP_STACK_COUNT,
+  CHIP_TRAY_SPEC,
   CARDS_PER_SHOE,
+  MEMBER_CARD_DIMENSIONS_MM,
+  PLAQUE_DIMENSIONS_MM,
   millimetresToMetres,
 } from "./dimensions.js";
+import {
+  getMembershipProgramme,
+  PLAQUE_DENOMINATIONS,
+  PLAQUE_STYLES,
+} from "./vip-assets.js";
 import {
   CASINO_IDS,
   getAllCasinoThemes,
@@ -108,6 +116,83 @@ describe("casino themes", () => {
       expect(theme.materials.chipInserts).toBeGreaterThanOrEqual(3);
       expect(theme.materials.chipInserts).toBeLessThanOrEqual(24);
     }
+  });
+});
+
+describe("plaque dimensions", () => {
+  it("is a landscape rectangle, unlike a round chip", () => {
+    expect(PLAQUE_DIMENSIONS_MM.width).toBeGreaterThan(PLAQUE_DIMENSIONS_MM.height);
+  });
+
+  it("is substantially larger than a chip", () => {
+    expect(PLAQUE_DIMENSIONS_MM.width).toBeGreaterThan(CHIP_DIMENSIONS_MM.diameter * 2);
+  });
+
+  it("is thicker than a standard chip", () => {
+    expect(PLAQUE_DIMENSIONS_MM.thickness).toBeGreaterThan(
+      CHIP_DIMENSIONS_MM.thickness,
+    );
+  });
+
+  it("keeps the name plate inside the panel", () => {
+    const panelWidth = PLAQUE_DIMENSIONS_MM.width - PLAQUE_DIMENSIONS_MM.panelInset * 2;
+    expect(PLAQUE_DIMENSIONS_MM.namePlateWidth).toBeLessThan(panelWidth);
+  });
+
+  it("styles every published plaque denomination", () => {
+    for (const denomination of PLAQUE_DENOMINATIONS) {
+      expect(PLAQUE_STYLES[denomination]).toBeDefined();
+    }
+  });
+
+  it("orders plaque values ascending", () => {
+    const values = [...PLAQUE_DENOMINATIONS];
+    expect(values).toEqual([...values].sort((left, right) => left - right));
+  });
+});
+
+describe("membership cards", () => {
+  it("uses the ISO ID-1 card format", () => {
+    expect(MEMBER_CARD_DIMENSIONS_MM.width).toBeCloseTo(85.6, 2);
+    expect(MEMBER_CARD_DIMENSIONS_MM.height).toBeCloseTo(53.98, 2);
+  });
+
+  it("defines a programme for every casino", () => {
+    for (const casinoId of CASINO_IDS) {
+      const programme = getMembershipProgramme(casinoId);
+      expect(programme.programmeName.length).toBeGreaterThan(0);
+      expect(programme.tiers.length).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("keeps tier names unique inside each programme", () => {
+    for (const casinoId of CASINO_IDS) {
+      const tierNames = getMembershipProgramme(casinoId).tiers.map(
+        (tier) => tier.name,
+      );
+      expect(new Set(tierNames).size).toBe(tierNames.length);
+    }
+  });
+});
+
+describe("chip tray", () => {
+  it("holds five rows of twenty chips", () => {
+    expect(CHIP_TRAY_SPEC.rowCount).toBe(5);
+    expect(CHIP_TRAY_SPEC.chipsPerRow).toBe(20);
+  });
+
+  it("uses a row pitch wide enough for a 39 mm chip", () => {
+    expect(CHIP_TRAY_SPEC.rowPitchMm).toBeGreaterThan(CHIP_DIMENSIONS_MM.diameter);
+  });
+
+  it("has a channel deep enough to retain a chip on edge", () => {
+    expect(CHIP_TRAY_SPEC.channelDepthMm).toBeGreaterThan(
+      CHIP_DIMENSIONS_MM.diameter / 2,
+    );
+  });
+
+  it("holds a full float of one hundred chips", () => {
+    expect(CHIP_TRAY_SPEC.rowCount * CHIP_TRAY_SPEC.chipsPerRow).toBe(100);
   });
 });
 

@@ -17,16 +17,39 @@ import {
   CARD_DIMENSIONS_MM,
   CHIP_DIMENSIONS_MM,
   CHIP_STACK_COUNT,
+  CHIP_TRAY_SPEC,
+  MEMBER_CARD_DIMENSIONS_MM,
+  PLAQUE_DIMENSIONS_MM,
 } from "../specs/dimensions.js";
 import { createChipModel, createChipStack } from "../models/chip.js";
 import { createCardHand, createCardModel } from "../models/card.js";
+import { createChipTray } from "../models/chip-tray.js";
+import {
+  createMemberCardSet,
+  createPlaqueModel,
+  createPlaqueStack,
+} from "../models/vip-assets.js";
+import {
+  getMembershipProgramme,
+  PLAQUE_DENOMINATIONS,
+} from "../specs/vip-assets.js";
 import type { CardRank, CardSuit } from "../textures/card-textures.js";
 
-type PreviewMode = "chip-set" | "chip-stacks" | "card-faces" | "dealt-hand";
+type PreviewMode =
+  | "chip-set"
+  | "chip-stacks"
+  | "plaque-set"
+  | "chip-tray"
+  | "member-cards"
+  | "card-faces"
+  | "dealt-hand";
 
 const PREVIEW_MODE_LABELS: Record<PreviewMode, string> = {
   "chip-set": "籌碼全套 Chip set",
   "chip-stacks": "碼堆 Chip stacks",
+  "plaque-set": "大額牌碼 Plaques",
+  "chip-tray": "碼盤 Chip tray",
+  "member-cards": "會員卡 Member cards",
   "card-faces": "撲克牌面 Card faces",
   "dealt-hand": "發牌手牌 Dealt hand",
 };
@@ -76,14 +99,15 @@ export class PreviewApp {
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.07;
-    this.controls.minDistance = 0.06;
-    this.controls.maxDistance = 1.2;
+    this.controls.minDistance = 0.04;
+    this.controls.maxDistance = 2.5;
     this.controls.target.set(0, 0.012, 0);
 
     this.scene.add(this.contentGroup);
     this.buildLighting();
     this.buildFeltSurface();
     this.rebuildContent();
+    this.frameActiveContent();
 
     window.addEventListener("resize", () => this.handleResize());
     this.handleResize();
@@ -170,6 +194,15 @@ export class PreviewApp {
       case "chip-stacks":
         this.buildChipStacks(theme);
         break;
+      case "plaque-set":
+        this.buildPlaqueSet(theme);
+        break;
+      case "chip-tray":
+        this.buildChipTray(theme);
+        break;
+      case "member-cards":
+        this.buildMemberCards(theme);
+        break;
       case "card-faces":
         this.buildCardFaces(theme);
         break;
@@ -218,6 +251,47 @@ export class PreviewApp {
       );
       this.contentGroup.add(stack);
     });
+  }
+
+  /** Every plaque value in a row, with a short stack to show thickness. */
+  private buildPlaqueSet(theme: CasinoTheme): void {
+    const spacing = 0.132;
+    PLAQUE_DENOMINATIONS.forEach((denomination, plaqueIndex) => {
+      const plaque = createPlaqueModel({
+        theme,
+        casinoId: this.activeCasinoId,
+        denomination,
+      });
+      plaque.position.set(
+        (plaqueIndex - (PLAQUE_DENOMINATIONS.length - 1) / 2) * spacing,
+        0.002,
+        -0.06,
+      );
+      this.contentGroup.add(plaque);
+    });
+
+    const topDenomination =
+      PLAQUE_DENOMINATIONS[PLAQUE_DENOMINATIONS.length - 1] ?? 1_000_000;
+    const stack = createPlaqueStack({
+      theme,
+      casinoId: this.activeCasinoId,
+      denomination: topDenomination,
+      count: 5,
+    });
+    stack.position.set(0, 0, 0.07);
+    this.contentGroup.add(stack);
+  }
+
+  /** The dealer float: a loaded five-channel tray. */
+  private buildChipTray(theme: CasinoTheme): void {
+    const tray = createChipTray({ theme, casinoId: this.activeCasinoId });
+    this.contentGroup.add(tray);
+  }
+
+  /** The full membership ladder for this casino, lowest tier on the left. */
+  private buildMemberCards(theme: CasinoTheme): void {
+    const cardSet = createMemberCardSet(theme, this.activeCasinoId);
+    this.contentGroup.add(cardSet);
   }
 
   /** Sample faces plus one card turned to show the back engraving. */
@@ -291,12 +365,42 @@ export class PreviewApp {
     this.activeCasinoId = casinoId;
     this.contentGroup.rotation.y = 0;
     this.rebuildContent();
+    // Tier counts differ per casino, so the member-card row changes width.
+    this.frameActiveContent();
   }
 
   setMode(mode: PreviewMode): void {
     this.activeMode = mode;
     this.contentGroup.rotation.y = 0;
     this.rebuildContent();
+    this.frameActiveContent();
+  }
+
+  /**
+   * Reframe the camera around whatever is currently built. Props differ in
+   * scale by an order of magnitude (a 39 mm chip versus a 360 mm tray), so a
+   * fixed camera would either clip the tray or lose the chip.
+   */
+  private frameActiveContent(): void {
+    const bounds = new THREE.Box3().setFromObject(this.contentGroup);
+    if (bounds.isEmpty()) {
+      return;
+    }
+
+    const size = bounds.getSize(new THREE.Vector3());
+    const centre = bounds.getCenter(new THREE.Vector3());
+    const largestExtent = Math.max(size.x, size.y, size.z);
+
+    const verticalFieldOfView = (this.camera.fov * Math.PI) / 180;
+    const fitDistance = (largestExtent / 2) / Math.tan(verticalFieldOfView / 2);
+    const framingMargin = 1.9;
+    const cameraDistance = fitDistance * framingMargin;
+
+    // Keep the established three-quarter viewing angle while changing distance.
+    const viewDirection = new THREE.Vector3(0.42, 0.52, 0.74).normalize();
+    this.camera.position.copy(centre).addScaledVector(viewDirection, cameraDistance);
+    this.controls.target.copy(centre);
+    this.controls.update();
   }
 
   setTurntable(enabled: boolean): void {
@@ -325,6 +429,25 @@ export class PreviewApp {
       ],
       ["牌背雕紋", theme.materials.cardEngrave],
       ["碼堆單位", `${CHIP_STACK_COUNT} 枚`],
+      [
+        "牌碼尺寸",
+        `${PLAQUE_DIMENSIONS_MM.width} × ${PLAQUE_DIMENSIONS_MM.height} × ${PLAQUE_DIMENSIONS_MM.thickness} mm`,
+      ],
+      [
+        "碼盤規格",
+        `${CHIP_TRAY_SPEC.rowCount} 排 × ${CHIP_TRAY_SPEC.chipsPerRow} 枚 · 排距 ${CHIP_TRAY_SPEC.rowPitchMm} mm`,
+      ],
+      ["會員計劃", getMembershipProgramme(this.activeCasinoId).programmeName],
+      [
+        "會員等級",
+        getMembershipProgramme(this.activeCasinoId)
+          .tiers.map((tier) => tier.name)
+          .join(" · "),
+      ],
+      [
+        "會員卡尺寸",
+        `${MEMBER_CARD_DIMENSIONS_MM.width} × ${MEMBER_CARD_DIMENSIONS_MM.height} mm（ID-1）`,
+      ],
       ["幣別", `${theme.tableRules.currency}（訓練幣）`],
     ];
     panel.innerHTML = rows

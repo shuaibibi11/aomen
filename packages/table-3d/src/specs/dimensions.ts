@@ -43,6 +43,51 @@ export const CARD_DIMENSIONS_MM = {
 } as const;
 
 /**
+ * High-denomination plaques are rectangular rather than round. Common
+ * manufactured sizes sit around 107x75 mm and 118x82 mm; the larger size is
+ * used here because Macau VIP rooms favour the larger format for big values.
+ * Plaques are thicker and heavier than chips (up to ~46 g).
+ */
+export const PLAQUE_DIMENSIONS_MM = {
+  width: 118,
+  height: 82,
+  thickness: 3.6,
+  cornerRadius: 6,
+  /** Inset of the printed/engraved inner panel. */
+  panelInset: 7,
+  /** Metal-look name plate applied to the centre of the panel. */
+  namePlateWidth: 62,
+  namePlateHeight: 22,
+} as const;
+
+/**
+ * Membership cards follow the ISO/IEC 7810 ID-1 format used by every bank and
+ * loyalty card, so the model reuses the real standard rather than guessing.
+ */
+export const MEMBER_CARD_DIMENSIONS_MM = {
+  width: 85.6,
+  height: 53.98,
+  thickness: 0.76,
+  cornerRadius: 3.18,
+} as const;
+
+/**
+ * Dealer chip trays are built around rows of twenty chips. The common casino
+ * tray is five rows wide with a 68 mm row pitch.
+ */
+export const CHIP_TRAY_SPEC = {
+  rowCount: 5,
+  chipsPerRow: 20,
+  /** Centre-to-centre distance between rows. */
+  rowPitchMm: 68,
+  /** Depth of the chip channel below the tray lip. */
+  channelDepthMm: 26,
+  wallThicknessMm: 6,
+  /** Extra length beyond the chip run, for the end walls. */
+  endMarginMm: 12,
+} as const;
+
+/**
  * Dealers count chips in stacks of twenty; a full stack is the standard unit
  * for paying and for reading a guest's position at a glance.
  */
@@ -68,6 +113,27 @@ export const CARD_SIZE = {
   height: millimetresToMetres(CARD_DIMENSIONS_MM.height),
   thickness: millimetresToMetres(CARD_DIMENSIONS_MM.thickness),
   cornerRadius: millimetresToMetres(CARD_DIMENSIONS_MM.cornerRadius),
+} as const;
+
+export const PLAQUE_SIZE = {
+  width: millimetresToMetres(PLAQUE_DIMENSIONS_MM.width),
+  height: millimetresToMetres(PLAQUE_DIMENSIONS_MM.height),
+  thickness: millimetresToMetres(PLAQUE_DIMENSIONS_MM.thickness),
+  cornerRadius: millimetresToMetres(PLAQUE_DIMENSIONS_MM.cornerRadius),
+} as const;
+
+export const MEMBER_CARD_SIZE = {
+  width: millimetresToMetres(MEMBER_CARD_DIMENSIONS_MM.width),
+  height: millimetresToMetres(MEMBER_CARD_DIMENSIONS_MM.height),
+  thickness: millimetresToMetres(MEMBER_CARD_DIMENSIONS_MM.thickness),
+  cornerRadius: millimetresToMetres(MEMBER_CARD_DIMENSIONS_MM.cornerRadius),
+} as const;
+
+export const CHIP_TRAY_SIZE = {
+  rowPitch: millimetresToMetres(CHIP_TRAY_SPEC.rowPitchMm),
+  channelDepth: millimetresToMetres(CHIP_TRAY_SPEC.channelDepthMm),
+  wallThickness: millimetresToMetres(CHIP_TRAY_SPEC.wallThicknessMm),
+  endMargin: millimetresToMetres(CHIP_TRAY_SPEC.endMarginMm),
 } as const;
 
 /**
