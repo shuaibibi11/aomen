@@ -58,6 +58,22 @@ importers:
         specifier: 3.0.5
         version: 3.0.5(@types/node@22.10.5)
 
+  packages/table-engine:
+    dependencies:
+      '@mct/rule-packs':
+        specifier: workspace:*
+        version: link:../rule-packs
+      '@mct/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      typescript:
+        specifier: 5.7.3
+        version: 5.7.3
+      vitest:
+        specifier: 3.0.5
+        version: 3.0.5(@types/node@22.10.5)
+
 packages:
 
   '@dimforge/rapier3d-compat@0.12.0':
