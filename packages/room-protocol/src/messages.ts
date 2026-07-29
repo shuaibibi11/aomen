@@ -229,6 +229,7 @@ export type ServerMessageType = ServerMessage["type"];
 /** Runtime-checkable error codes the server can report to a client. */
 export const ROOM_ERROR_CODES = [
   "unknown_room",
+  "room_unavailable",
   "not_joined",
   "actor_not_allowed",
   "actor_mismatch",

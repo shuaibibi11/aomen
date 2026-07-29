@@ -238,6 +238,7 @@ export class Room {
   /** Whether an ordinary client socket may bind to this actor identity. */
   canClientJoin(actorId: ActorId, credential: string): boolean {
     return (
+      !this.isFaulted() &&
       actorId === this.humanActorId &&
       this.allowedClientActorIds.has(actorId) &&
       credential === this.joinCredential

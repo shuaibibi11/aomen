@@ -295,6 +295,8 @@ describe("RoomManager", () => {
 
     expect(room.isFaulted()).toBe(true);
     expect(manager.isRoomFaulted(TABLE_ID)).toBe(true);
+    expect(room.canClientJoin(HUMAN, JOIN_CREDENTIAL)).toBe(false);
+    expect(manager.canClientJoin(TABLE_ID, HUMAN, JOIN_CREDENTIAL)).toBe(false);
     const snapshotAfterFailure = room.getSnapshot();
     const eventCountAfterFailure = store.count();
     const appendAttemptsAfterFailure = store.appendAttempts;

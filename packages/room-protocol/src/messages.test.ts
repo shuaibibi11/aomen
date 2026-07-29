@@ -63,6 +63,7 @@ describe("room protocol error codes", () => {
   it("exports the complete runtime-checkable error code set", () => {
     expect(ROOM_ERROR_CODES).toEqual([
       "unknown_room",
+      "room_unavailable",
       "not_joined",
       "actor_not_allowed",
       "actor_mismatch",
@@ -73,6 +74,7 @@ describe("room protocol error codes", () => {
   });
 
   it("recognizes protocol error codes at runtime", () => {
+    expect(isRoomErrorCode("room_unavailable")).toBe(true);
     expect(isRoomErrorCode("intent_not_allowed")).toBe(true);
     expect(isRoomErrorCode("internal_error")).toBe(true);
     expect(isRoomErrorCode("database_exploded")).toBe(false);

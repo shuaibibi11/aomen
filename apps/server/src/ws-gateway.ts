@@ -172,6 +172,14 @@ export class WsGateway {
       });
       return;
     }
+    if (room.isFaulted()) {
+      this.send(socket, {
+        type: "error",
+        code: "room_unavailable",
+        message: "Room is unavailable",
+      });
+      return;
+    }
     if (!this.roomManager.canClientJoin(tableId, actorId, credential)) {
       this.send(socket, {
         type: "error",

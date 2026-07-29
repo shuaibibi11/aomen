@@ -399,6 +399,52 @@ describe("WsGateway room delivery", () => {
     socket.close();
   });
 
+  it("rejects new joins to a faulted room without exposing its divergent snapshot", async () => {
+    const { humanActorId, room, store, tableId, url } = await createGateway(
+      () => undefined,
+    );
+    const joinedSocket = await connectClient(url);
+    await joinClient(joinedSocket, tableId, humanActorId);
+    store.shouldFailAppend = true;
+    const faultResponse = waitForMessage(
+      joinedSocket,
+      (message) => message.type === "error",
+    );
+
+    joinedSocket.send(
+      JSON.stringify({
+        type: "submit_intent",
+        intent: {
+          type: "place_bet",
+          actorId: humanActorId,
+          seatId: room.getHumanSeatId(),
+          betKind: "player",
+          amount: 100,
+        },
+      }),
+    );
+    await faultResponse;
+    expect(room.isFaulted()).toBe(true);
+
+    const newSocket = await connectClient(url);
+    const joinResponse = await joinClient(
+      newSocket,
+      tableId,
+      humanActorId,
+      JOIN_CREDENTIAL,
+    );
+
+    expect(joinResponse).toEqual({
+      type: "error",
+      code: "room_unavailable",
+      message: "Room is unavailable",
+    });
+    expect(JSON.stringify(joinResponse)).not.toContain("sensitive database detail");
+    expect(joinResponse).not.toHaveProperty("snapshot");
+    joinedSocket.close();
+    newSocket.close();
+  });
+
   it("handles server and socket errors through the injected reporter", async () => {
     const reportedErrors: unknown[] = [];
     const { humanActorId, tableId, url, webSocketServer } = await createGateway(
