@@ -201,7 +201,7 @@ describe("AutomaticRoundScheduler", () => {
     expect(scheduler.isRunning()).toBe(true);
   });
 
-  it("retries a rejected AI decision after restarting in the same round", async () => {
+  it("keeps scheduling and caches a rejected AI decision for the round", async () => {
     const tableId = asTableId("decision-restart-scheduler-table");
     const store = new MemoryEventStore();
     const decideBet = vi.fn()
@@ -223,18 +223,19 @@ describe("AutomaticRoundScheduler", () => {
     scheduler.start();
     await advance(0);
 
-    expect(scheduler.isRunning()).toBe(false);
-    expect(onError).toHaveBeenCalledOnce();
+    expect(scheduler.isRunning()).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
     expect(room.getSnapshot().phase).toBe("round_betting");
 
+    scheduler.stop();
     scheduler.start();
     await advance(0);
 
     expect(scheduler.isRunning()).toBe(true);
-    expect(decideBet).toHaveBeenCalledTimes(2);
+    expect(decideBet).toHaveBeenCalledOnce();
     expect(
       store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
   });
 
   it("falls back from fractional LLM wagers and completes the round", async () => {
@@ -371,7 +372,64 @@ describe("AutomaticRoundScheduler", () => {
             event.intent?.type === "place_bet" &&
             event.intent.actorId !== humanActorId,
         ),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
+  });
+
+  it("lets a fast AI bet while another AI is pending and reuses decisions on restart", async () => {
+    const tableId = asTableId("concurrent-ai-scheduler-table");
+    const store = new MemoryEventStore();
+    let resolveFirstDecision!: (
+      decision: { betKind: "player"; amount: number },
+    ) => void;
+    const firstDecision = new Promise<{ betKind: "player"; amount: number }>(
+      (resolve) => {
+        resolveFirstDecision = resolve;
+      },
+    );
+    const firstDecideBet = vi.fn(() => firstDecision);
+    const secondDecideBet = vi.fn(async () => ({
+      betKind: "banker" as const,
+      amount: 100,
+    }));
+    const room = new RoomManager(store).createRoom({
+      tableId,
+      rulePack: createRulePack(),
+      humanActorId: asActorId("concurrent-ai-human"),
+      joinCredential: "concurrent-ai-credential",
+      seatCount: 3,
+      aiCount: 2,
+      shoeSeed: "concurrent-ai-seed",
+      aiDecisionSourceFactory: ({ index }) => ({
+        decideBet: index === 1 ? firstDecideBet : secondDecideBet,
+      }),
+    });
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+
+    scheduler.start();
+    await advance(0);
+
+    expect(firstDecideBet).toHaveBeenCalledOnce();
+    expect(secondDecideBet).toHaveBeenCalledOnce();
+    expect(
+      store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
+    ).toHaveLength(1);
+
+    scheduler.stop();
+    scheduler.start();
+    await advance(0);
+
+    expect(firstDecideBet).toHaveBeenCalledOnce();
+    expect(secondDecideBet).toHaveBeenCalledOnce();
+
+    await advance(TIMING.bettingWindowMs);
+    expect(room.getSnapshot().phase).toBe("no_more_bets");
+
+    resolveFirstDecision({ betKind: "player", amount: 100 });
+    await advance(0);
+
+    expect(
+      store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
+    ).toHaveLength(1);
   });
 
   it("deals at most one card for each card interval and reaches round_end", async () => {

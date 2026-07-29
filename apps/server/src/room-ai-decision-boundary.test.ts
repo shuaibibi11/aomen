@@ -115,7 +115,7 @@ describe("Room AI decision boundary", () => {
     expect(betEvents[1]).toEqual(expect.objectContaining({ accepted: true }));
   });
 
-  it("retries a rejected decision during a same-round scheduler restart", async () => {
+  it("sits out and caches a rejected decision during a same-round restart", async () => {
     const decideBet = vi.fn()
       .mockRejectedValueOnce(new Error("temporary decision failure"))
       .mockResolvedValueOnce({ betKind: "player", amount: 100 });
@@ -135,14 +135,14 @@ describe("Room AI decision boundary", () => {
     room.startAutomaticRound();
     await expect(
       room.placeAutomaticPlayerBets(new AbortController().signal),
-    ).rejects.toThrow("temporary decision failure");
+    ).resolves.toBeUndefined();
     await expect(
       room.placeAutomaticPlayerBets(new AbortController().signal),
     ).resolves.toBeUndefined();
 
-    expect(decideBet).toHaveBeenCalledTimes(2);
+    expect(decideBet).toHaveBeenCalledOnce();
     expect(
       store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
   });
 });

@@ -422,64 +422,66 @@ export class Room {
     this.applyAutomaticIntent({ type: "start_round", actorId: SYSTEM_DEALER });
   }
 
-  /** Ask each seated AI for its bet while betting remains open. */
+  /** Ask every uncommitted AI concurrently and submit each result independently. */
   async placeAutomaticPlayerBets(signal: AbortSignal): Promise<void> {
-    for (const seated of this.aiSeats) {
-      const snapshotBeforeDecision = this.runtime.getSnapshot();
-      this.synchronizeAiDecisionCache(snapshotBeforeDecision.roundId);
-      if (signal.aborted || snapshotBeforeDecision.phase !== "round_betting") {
-        return;
-      }
-      if (snapshotBeforeDecision.bets.some((bet) => bet.seatId === seated.seatId)) {
-        continue;
-      }
+    const decisionSnapshot = this.runtime.getSnapshot();
+    this.synchronizeAiDecisionCache(decisionSnapshot.roundId);
+    if (signal.aborted || decisionSnapshot.phase !== "round_betting") {
+      return;
+    }
 
-      const decisionRoundId = snapshotBeforeDecision.roundId;
-      const decisionKey = seated.seatId;
-      let decisionEntry = this.aiDecisionCache.get(decisionKey);
+    const seatsAwaitingDecisions = this.aiSeats.filter(
+      (seated) =>
+        !decisionSnapshot.bets.some((bet) => bet.seatId === seated.seatId),
+    );
+    const seatDecisionEntries = seatsAwaitingDecisions.map((seated) => {
+      let decisionEntry = this.aiDecisionCache.get(seated.seatId);
       if (decisionEntry === undefined) {
         const controller = new AbortController();
         const context = this.createPlayerDecisionContext(
-          snapshotBeforeDecision,
+          decisionSnapshot,
           seated.seatId,
         );
-        const sourceDecisionPromise = Promise.resolve().then(() =>
+        const decisionPromise = Promise.resolve().then(() =>
           seated.decisionSource.decideBet(context, controller.signal),
         );
-        const decisionPromise = sourceDecisionPromise.catch((error: unknown) => {
-          const currentEntry = this.aiDecisionCache.get(decisionKey);
-          if (currentEntry?.decisionPromise === decisionPromise) {
-            this.aiDecisionCache.delete(decisionKey);
-          }
-          throw error;
-        });
         decisionEntry = { controller, decisionPromise };
-        this.aiDecisionCache.set(decisionKey, decisionEntry);
+        this.aiDecisionCache.set(seated.seatId, decisionEntry);
       }
+      return { seated, decisionEntry };
+    });
 
-      const bet = await decisionEntry.decisionPromise;
-      const snapshotAfterDecision = this.runtime.getSnapshot();
-      this.synchronizeAiDecisionCache(snapshotAfterDecision.roundId);
-      if (
-        signal.aborted ||
-        snapshotAfterDecision.phase !== "round_betting" ||
-        snapshotAfterDecision.roundId !== decisionRoundId
-      ) {
+    await Promise.all(seatDecisionEntries.map(async ({ seated, decisionEntry }) => {
+      let bet: PlayerBetDecision | null;
+      try {
+        bet = await decisionEntry.decisionPromise;
+      } catch {
+        // A failed source sits out for this round. Its rejected promise stays
+        // cached so a same-round scheduler restart cannot invoke it twice.
         return;
       }
-      if (snapshotAfterDecision.bets.some((placedBet) => placedBet.seatId === seated.seatId)) {
-        continue;
+
+      const snapshotAfterDecision = this.runtime.getSnapshot();
+      this.synchronizeAiDecisionCache(snapshotAfterDecision.roundId);
+      const canSubmitDecision =
+        !signal.aborted &&
+        snapshotAfterDecision.phase === "round_betting" &&
+        snapshotAfterDecision.roundId === decisionSnapshot.roundId &&
+        !snapshotAfterDecision.bets.some(
+          (placedBet) => placedBet.seatId === seated.seatId,
+        );
+      if (!canSubmitDecision || bet === null) {
+        return;
       }
-      if (bet !== null) {
-        this.applyIntentAndStore({
-          type: "place_bet",
-          actorId: seated.actorId,
-          seatId: seated.seatId,
-          betKind: bet.betKind,
-          amount: bet.amount,
-        });
-      }
-    }
+
+      this.applyIntentAndStore({
+        type: "place_bet",
+        actorId: seated.actorId,
+        seatId: seated.seatId,
+        betKind: bet.betKind,
+        amount: bet.amount,
+      });
+    }));
   }
 
   /** Close the betting window using the authoritative system dealer intent. */
