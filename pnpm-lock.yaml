@@ -51,6 +51,15 @@ importers:
 
   packages/table-3d:
     dependencies:
+      '@mct/rule-packs':
+        specifier: workspace:*
+        version: link:../rule-packs
+      '@mct/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@mct/table-engine':
+        specifier: workspace:*
+        version: link:../table-engine
       three:
         specifier: 0.185.1
         version: 0.185.1

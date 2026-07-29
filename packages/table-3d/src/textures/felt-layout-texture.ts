@@ -157,7 +157,7 @@ function fillRoundedRect(
 function resolveSpotInk(theme: CasinoTheme, spotId: BetSpotId): string {
   switch (spotId) {
     case "banker":
-    case "banker-pair":
+    case "banker_pair":
       return theme.palette.gold;
     case "tie":
       return theme.palette.tieBand;

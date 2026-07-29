@@ -15,9 +15,13 @@ import {
   DEALER_STATION_LAYOUT,
   FELT_DEALER_EDGE_Z,
   FELT_INSET,
+  findBetSpotAtWorldPosition,
   getSeatLabels,
   MASS_SEAT_LABELS,
+  REFERENCE_BET_SPOTS,
   SEAT_BLOCK,
+  seatLocalToWorld,
+  worldToSeatLocal,
   SEAT_BLOCK_DEALER_REACH,
   SEAT_BLOCK_GUEST_REACH,
   TABLE_DIMENSIONS_MM,
@@ -176,20 +180,129 @@ describe("printed seat blocks fit on the felt", () => {
     });
   }
 
+  /**
+   * Comparing seat spacing against the box width is not enough: the blocks are
+   * fanned, so a rotated block reaches further sideways than its own width. This
+   * checks every spot centre resolves to its own seat, which is the property that
+   * actually matters for attributing a click, and it is what caught seat 7's
+   * pair circle sitting inside seat 6's BANKER box.
+   */
   it("does not overlap neighbouring blocks", () => {
-    const seats = computeSeatPlacements("mass");
-    for (let seatIndex = 1; seatIndex < seats.length; seatIndex += 1) {
-      const previousSeat = seats[seatIndex - 1];
-      const currentSeat = seats[seatIndex];
-      if (previousSeat === undefined || currentSeat === undefined) {
-        continue;
+    for (const variant of ["mass", "vip"] as const) {
+      const seats = computeSeatPlacements(variant);
+      for (const seat of seats) {
+        for (const spot of REFERENCE_BET_SPOTS) {
+          const world = seatLocalToWorld(seat, spot.localX, spot.localZ);
+          const hit = findBetSpotAtWorldPosition(world.x, world.z, seats);
+          expect(hit?.seatLabel).toBe(seat.label);
+          expect(hit?.spotId).toBe(spot.id);
+        }
       }
-      const centreSpacing = Math.hypot(
-        currentSeat.x - previousSeat.x,
-        currentSeat.z - previousSeat.z,
-      );
-      expect(centreSpacing).toBeGreaterThan(SEAT_BLOCK.boxWidth);
     }
+  });
+});
+
+/**
+ * Hit testing is what turns a click into a `place_bet` intent, so it has to
+ * agree exactly with the transform the felt texture drew the spot with.
+ */
+describe("bet spot hit testing", () => {
+  const massSeats = computeSeatPlacements("mass");
+
+  it("round-trips every spot centre back to its own spot", () => {
+    for (const seat of massSeats) {
+      for (const spot of REFERENCE_BET_SPOTS) {
+        const worldPosition = seatLocalToWorld(seat, spot.localX, spot.localZ);
+        const hit = findBetSpotAtWorldPosition(
+          worldPosition.x,
+          worldPosition.z,
+          massSeats,
+        );
+        expect(hit).not.toBeNull();
+        expect(hit?.seatLabel).toBe(seat.label);
+        expect(hit?.spotId).toBe(spot.id);
+      }
+    }
+  });
+
+  it("inverts the seat rotation exactly", () => {
+    for (const seat of massSeats) {
+      const world = seatLocalToWorld(seat, 0.031, -0.072);
+      const local = worldToSeatLocal(seat, world.x, world.z);
+      expect(local.localX).toBeCloseTo(0.031, 9);
+      expect(local.localZ).toBeCloseTo(-0.072, 9);
+    }
+  });
+
+  it("returns null for a point on bare felt", () => {
+    // Far behind every block, near the dealer edge.
+    const hit = findBetSpotAtWorldPosition(0, FELT_DEALER_EDGE_Z * 0.9, massSeats);
+    expect(hit).toBeNull();
+  });
+
+  it("returns null in the gap between two stacked boxes", () => {
+    const seat = massSeats[Math.floor(massSeats.length / 2)];
+    expect(seat).toBeDefined();
+    if (seat === undefined) {
+      return;
+    }
+    const playerSpot = REFERENCE_BET_SPOTS.find((spot) => spot.id === "player");
+    const bankerSpot = REFERENCE_BET_SPOTS.find((spot) => spot.id === "banker");
+    expect(playerSpot).toBeDefined();
+    expect(bankerSpot).toBeDefined();
+    if (playerSpot === undefined || bankerSpot === undefined) {
+      return;
+    }
+
+    // Midway between the two box edges falls in the printed gap.
+    const playerInnerEdge = playerSpot.localZ - playerSpot.depth / 2;
+    const bankerOuterEdge = bankerSpot.localZ + bankerSpot.depth / 2;
+    const gapCentreLocalZ = (playerInnerEdge + bankerOuterEdge) / 2;
+    const world = seatLocalToWorld(seat, 0, gapCentreLocalZ);
+
+    expect(findBetSpotAtWorldPosition(world.x, world.z, massSeats)).toBeNull();
+  });
+
+  it("treats the pair circles as circles, not their bounding squares", () => {
+    const seat = massSeats[Math.floor(massSeats.length / 2)];
+    const pairSpot = REFERENCE_BET_SPOTS.find(
+      (spot) => spot.id === "player_pair",
+    );
+    expect(seat).toBeDefined();
+    expect(pairSpot).toBeDefined();
+    if (seat === undefined || pairSpot === undefined) {
+      return;
+    }
+
+    // A point just inside the bounding square's corner is outside the circle.
+    const cornerOffset = pairSpot.radius * 0.9;
+    const world = seatLocalToWorld(
+      seat,
+      pairSpot.localX + cornerOffset,
+      pairSpot.localZ + cornerOffset,
+    );
+    const hit = findBetSpotAtWorldPosition(world.x, world.z, massSeats);
+    expect(hit?.spotId).not.toBe("player_pair");
+  });
+
+  it("maps a click to the seat whose block it is inside", () => {
+    const leftSeat = massSeats[0];
+    const rightSeat = massSeats[massSeats.length - 1];
+    expect(leftSeat).toBeDefined();
+    expect(rightSeat).toBeDefined();
+    if (leftSeat === undefined || rightSeat === undefined) {
+      return;
+    }
+
+    const leftWorld = computeBetSpotPosition(leftSeat, "banker");
+    const rightWorld = computeBetSpotPosition(rightSeat, "banker");
+
+    expect(
+      findBetSpotAtWorldPosition(leftWorld.x, leftWorld.z, massSeats)?.seatLabel,
+    ).toBe(leftSeat.label);
+    expect(
+      findBetSpotAtWorldPosition(rightWorld.x, rightWorld.z, massSeats)?.seatLabel,
+    ).toBe(rightSeat.label);
   });
 });
 

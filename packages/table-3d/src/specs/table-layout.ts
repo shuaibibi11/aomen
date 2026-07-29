@@ -8,6 +8,7 @@
  *
  * Reference: docs/superpowers/specs/2026-07-27-baccarat-table-real-spec.md
  */
+import type { BetKind } from "@mct/shared";
 import { millimetresToMetres } from "./dimensions.js";
 
 export type TableVariant = "mass" | "vip";
@@ -55,8 +56,8 @@ export const SEAT_ARC = {
    * seven blocks spread far enough apart to not crowd each other: at the old
    * span adjacent blocks were within a millimetre of touching.
    */
-  startDegrees: -165,
-  endDegrees: -15,
+  startDegrees: -172,
+  endDegrees: -8,
   /**
    * Ellipse radii as a fraction of the table half-width and depth.
    *
@@ -128,8 +129,14 @@ export function getSeatLabels(variant: TableVariant): readonly number[] {
  *
  * Order matters for the printed layout: the spec requires PLAYER nearest the
  * guest, then BANKER, then TIE furthest towards the table centre.
+ *
+ * This is deliberately the engine's own `BetKind` rather than a parallel enum.
+ * A click on a printed spot has to become a `place_bet` intent, and any private
+ * spelling here would need a translation table that could silently drift from
+ * the engine (the two once disagreed on `player_pair` vs `player-pair`). Reusing
+ * the type means a mismatch is a compile error instead of a runtime surprise.
  */
-export type BetSpotId = "player" | "banker" | "tie" | "player-pair" | "banker-pair";
+export type BetSpotId = BetKind;
 
 /**
  * One printed betting spot, described in the seat's own local frame.
@@ -170,8 +177,16 @@ export interface BetSpotSpec {
  * PLAYER box nearest the guest.
  */
 export const SEAT_BLOCK = {
-  /** Width of the PLAYER and BANKER boxes. */
-  boxWidth: 0.26,
+  /**
+   * Width of the PLAYER and BANKER boxes.
+   *
+   * Seven blocks have to fit across 2.18 m of cloth, and each one is also fanned
+   * outwards, which widens its lateral footprint. At 0.26 m the outer blocks
+   * overlapped their neighbours (seat 7's pair circle landed inside seat 6's
+   * BANKER box), so a click could not be attributed to one seat. 0.225 m still
+   * holds a chip stack comfortably at 39 mm per chip.
+   */
+  boxWidth: 0.225,
   /** Depth of the PLAYER and BANKER boxes. */
   boxDepth: 0.115,
   /** TIE is a shallower band, as on a real layout. */
@@ -221,7 +236,7 @@ export function buildSeatBetSpots(
 
   return [
     {
-      id: "player-pair",
+      id: "player_pair",
       label: "閒對",
       sublabel: "11:1",
       localZ: pairCentreZ,
@@ -232,7 +247,7 @@ export function buildSeatBetSpots(
       radius: pairRadius,
     },
     {
-      id: "banker-pair",
+      id: "banker_pair",
       label: "莊對",
       sublabel: "11:1",
       localZ: pairCentreZ,
@@ -366,6 +381,75 @@ export function computeBetSpotCorners(
   return localCorners.map((corner) =>
     seatLocalToWorld(seat, corner.localX, corner.localZ),
   );
+}
+
+/**
+ * Convert a world position into a seat's local frame.
+ *
+ * This is the inverse of `seatLocalToWorld`, used for hit testing: a click gives
+ * a world point on the felt, and the local frame is where the spot rectangles
+ * are defined. Inverting the same rotation both ways is what makes a click land
+ * in the box the guest actually sees.
+ */
+export function worldToSeatLocal(
+  seat: SeatPlacement,
+  worldX: number,
+  worldZ: number,
+): { localX: number; localZ: number } {
+  const offsetX = worldX - seat.x;
+  const offsetZ = worldZ - seat.z;
+  const cosine = Math.cos(seat.facingRadians);
+  const sine = Math.sin(seat.facingRadians);
+  // Rotating by -facingRadians undoes the seat's fan.
+  return {
+    localX: offsetX * cosine + offsetZ * sine,
+    localZ: -offsetX * sine + offsetZ * cosine,
+  };
+}
+
+/** A betting spot identified at a specific seat. */
+export interface BetSpotHit {
+  readonly seatLabel: number;
+  readonly spotId: BetSpotId;
+}
+
+/**
+ * Find which seat's betting spot contains a world position, or null.
+ *
+ * Boxes are tested as rectangles in the seat's local frame and circles by
+ * radius, so a click in the gap between two spots correctly hits nothing rather
+ * than snapping to the nearest one. Seats are checked in order and the first
+ * containing spot wins; the layout tests assert the spots do not overlap, so
+ * that order is not load-bearing.
+ */
+export function findBetSpotAtWorldPosition(
+  worldX: number,
+  worldZ: number,
+  seats: readonly SeatPlacement[],
+  spots: readonly BetSpotSpec[] = REFERENCE_BET_SPOTS,
+): BetSpotHit | null {
+  for (const seat of seats) {
+    const { localX, localZ } = worldToSeatLocal(seat, worldX, worldZ);
+    for (const spot of spots) {
+      const offsetX = localX - spot.localX;
+      const offsetZ = localZ - spot.localZ;
+
+      if (spot.shape === "circle") {
+        if (Math.hypot(offsetX, offsetZ) <= spot.radius) {
+          return { seatLabel: seat.label, spotId: spot.id };
+        }
+        continue;
+      }
+
+      if (
+        Math.abs(offsetX) <= spot.width / 2
+        && Math.abs(offsetZ) <= spot.depth / 2
+      ) {
+        return { seatLabel: seat.label, spotId: spot.id };
+      }
+    }
+  }
+  return null;
 }
 
 /** Converted-to-metres table figures used by the geometry builders. */

@@ -12,6 +12,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@mct/rule-packs": "workspace:*",
+    "@mct/shared": "workspace:*",
+    "@mct/table-engine": "workspace:*",
     "three": "0.185.1"
   },
   "devDependencies": {

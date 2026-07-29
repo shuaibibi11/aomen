@@ -5,6 +5,7 @@
  * read a real deck. Card backs carry the per-casino engraving.
  */
 import * as THREE from "three";
+import type { Rank, Suit } from "@mct/shared";
 import type { CasinoTheme } from "../specs/casino-theme.js";
 import { CARD_DIMENSIONS_MM } from "../specs/dimensions.js";
 
@@ -14,10 +15,17 @@ const CARD_TEXTURE_HEIGHT = Math.round(
   (CARD_TEXTURE_WIDTH * CARD_DIMENSIONS_MM.height) / CARD_DIMENSIONS_MM.width,
 );
 
-export type CardSuit = "spade" | "heart" | "diamond" | "club";
-export type CardRank =
-  | "A" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
-  | "10" | "J" | "Q" | "K";
+/**
+ * Card identity is the engine's own, not a parallel definition.
+ *
+ * These were previously declared locally with the same members. That worked only
+ * by luck: the bet-spot ids were declared the same way and drifted (`player_pair`
+ * versus `player-pair`), which broke every click on a pair circle. Aliasing the
+ * engine types means a dealt card can be rendered directly, and any future
+ * divergence is a compile error rather than a card that fails to draw.
+ */
+export type CardSuit = Suit;
+export type CardRank = Rank;
 
 const SUIT_GLYPHS: Record<CardSuit, string> = {
   spade: "\u2660",
