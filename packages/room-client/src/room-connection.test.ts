@@ -30,8 +30,10 @@ type SocketEventType = "open" | "message" | "close" | "error";
 
 class FakeSocket implements WebSocketLike {
   readonly sentMessages: ClientMessage[] = [];
+  readonly closeArguments: Array<{ code: number | undefined; reason: string | undefined }> = [];
   readyState = 0;
   closeCalls = 0;
+  closeError: Error | null = null;
   sendError: Error | null = null;
   private readonly listeners = new Map<SocketEventType, Set<(event: unknown) => void>>();
 
@@ -52,8 +54,12 @@ class FakeSocket implements WebSocketLike {
     this.sentMessages.push(JSON.parse(data) as ClientMessage);
   }
 
-  close(): void {
+  close(code?: number, reason?: string): void {
     this.closeCalls += 1;
+    this.closeArguments.push({ code, reason });
+    if (this.closeError !== null) {
+      throw this.closeError;
+    }
     this.readyState = 3;
   }
 
@@ -442,6 +448,149 @@ describe("RoomConnection", () => {
     join(sockets[1]!);
     expect(observedMessages).toEqual(["joined", "joined"]);
     expect(connection.snapshot.state).toBe("connected");
+  });
+
+  it("uses a bounded fixed close reason and reconnects when socket close throws", async () => {
+    const { connection, sockets, clock } = createHarness();
+    const bootstrapPromise = connection.connect();
+    const uncontrolledError = new Error("sensitive-" + "x".repeat(500));
+    sockets[0]!.sendError = uncontrolledError;
+    sockets[0]!.closeError = new Error("fake close failed");
+
+    expect(() => sockets[0]?.open()).not.toThrow();
+    expect(sockets[0]?.closeArguments).toEqual([{
+      code: 4000,
+      reason: "Room transport failure",
+    }]);
+    expect(sockets[0]?.closeArguments[0]?.reason?.length).toBeLessThanOrEqual(123);
+    expect(sockets[0]?.closeArguments[0]?.reason).not.toContain("sensitive");
+    expect(connection.snapshot.state).toBe("reconnecting");
+
+    clock.advanceBy(500);
+    join(sockets[1]!);
+    await expect(bootstrapPromise).resolves.toEqual(snapshot);
+  });
+
+  it("rejects a permanent join failure even when socket close throws", async () => {
+    const { connection, sockets, clock } = createHarness();
+    const bootstrapPromise = connection.connect();
+    sockets[0]!.closeError = new Error("fake close failed");
+    sockets[0]?.open();
+
+    expect(() => sockets[0]?.message({
+      type: "error",
+      code: "actor_not_allowed",
+      message: "private-" + "x".repeat(500),
+    })).not.toThrow();
+
+    await expect(bootstrapPromise).rejects.toBeInstanceOf(JoinRejectedError);
+    expect(sockets[0]?.closeArguments).toEqual([{
+      code: 4001,
+      reason: "Room join rejected",
+    }]);
+    expect(connection.snapshot.state).toBe("disconnected");
+    expect(clock.pendingTaskCount).toBe(0);
+  });
+
+  it.each([
+    {
+      name: "joined snapshot",
+      message: {
+        type: "joined",
+        tableId: "table-1",
+        actorId: "human-1",
+        protocolVersion: ROOM_PROTOCOL_VERSION,
+        snapshot: { ...snapshot, tableId: "table-2" },
+      },
+    },
+    {
+      name: "snapshot",
+      message: {
+        type: "snapshot",
+        snapshot: { ...snapshot, tableId: "table-2" },
+      },
+    },
+    {
+      name: "event",
+      message: {
+        type: "event",
+        event: {
+          tableId: "table-2",
+          roundId: "round-1",
+          seq: 1,
+          actorId: "human-1",
+          phaseAfter: "round_betting",
+          rulePackId: "baccarat",
+          rulePackVersion: "1.0.0",
+          at: 1,
+        },
+      },
+    },
+  ])("rejects cross-room $name messages without listener delivery", ({ message }) => {
+    const { connection, sockets, clock } = createHarness();
+    const observedMessages: string[] = [];
+    connection.subscribeMessage((receivedMessage) => observedMessages.push(receivedMessage.type));
+    void connection.connect();
+    sockets[0]?.open();
+
+    sockets[0]?.message(message);
+
+    expect(observedMessages).toEqual([]);
+    expect(connection.snapshot.state).toBe("reconnecting");
+    expect(clock.nextDelayMs).toBe(500);
+  });
+
+  it("does not overwrite closed state when a joined listener disposes", async () => {
+    const { connection, sockets, clock } = createHarness();
+    connection.subscribeMessage((message) => {
+      if (message.type === "joined") {
+        connection.dispose();
+      }
+    });
+    const bootstrapPromise = connection.connect();
+    sockets[0]?.open();
+    sockets[0]?.message({
+      type: "joined",
+      tableId: "table-1",
+      actorId: "human-1",
+      protocolVersion: ROOM_PROTOCOL_VERSION,
+      snapshot,
+    });
+
+    await expect(bootstrapPromise).rejects.toBeInstanceOf(RoomConnectionUnavailableError);
+    expect(connection.snapshot.state).toBe("closed");
+    expect(clock.pendingTaskCount).toBe(0);
+    expect(sockets[0]?.closeCalls).toBe(1);
+  });
+
+  it("does not reconnect when an error listener disposes during recovery", () => {
+    const { connection, sockets, clock } = createHarness();
+    connection.subscribeError(() => connection.dispose());
+    void connection.connect();
+    join(sockets[0]!);
+
+    sockets[0]?.message({ type: "pong", nonce: "invalid" });
+
+    expect(connection.snapshot.state).toBe("closed");
+    expect(clock.pendingTaskCount).toBe(0);
+    expect(sockets[0]?.closeCalls).toBe(1);
+  });
+
+  it("does not send join after a joining state listener disposes", async () => {
+    const { connection, sockets, clock } = createHarness();
+    connection.subscribeState((state) => {
+      if (state.state === "joining") {
+        connection.dispose();
+      }
+    });
+    const bootstrapPromise = connection.connect();
+
+    sockets[0]?.open();
+
+    await expect(bootstrapPromise).rejects.toBeInstanceOf(RoomConnectionUnavailableError);
+    expect(sockets[0]?.sentMessages).toEqual([]);
+    expect(connection.snapshot.state).toBe("closed");
+    expect(clock.pendingTaskCount).toBe(0);
   });
 
   it.each([

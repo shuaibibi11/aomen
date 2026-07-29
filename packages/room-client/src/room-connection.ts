@@ -28,6 +28,9 @@ import {
 const WEB_SOCKET_OPEN_STATE = 1;
 const HEARTBEAT_CLOSE_CODE = 4000;
 const JOIN_REJECTED_CLOSE_CODE = 4001;
+const MANUAL_CLOSE_REASON = "Room connection closed";
+const TRANSPORT_FAILURE_CLOSE_REASON = "Room transport failure";
+const JOIN_REJECTED_CLOSE_REASON = "Room join rejected";
 const TRANSIENT_JOIN_ERROR_CODES: ReadonlySet<RoomErrorCode> = new Set([
   "room_unavailable",
   "internal_error",
@@ -233,7 +236,7 @@ export class RoomConnection {
     this.activeSocket = null;
     if (activeSocket !== null) {
       this.detachSocketListeners(activeSocket);
-      activeSocket.socket.close(1000, "Room connection closed");
+      this.safeClose(activeSocket.socket, 1000, MANUAL_CLOSE_REASON);
     }
     if (this.bootstrap !== null && !this.bootstrap.settled) {
       this.bootstrap.settled = true;
@@ -256,6 +259,9 @@ export class RoomConnection {
     this.clearReconnectTimer();
     if (!isReconnect) {
       this.transitionState("connecting");
+      if (this.permanentlyClosed) {
+        return;
+      }
     }
 
     const generation = ++this.socketGeneration;
@@ -287,6 +293,9 @@ export class RoomConnection {
       return;
     }
     this.transitionState("joining");
+    if (!this.isCurrentSocket(activeSocket)) {
+      return;
+    }
     try {
       this.sendSerialized(activeSocket, {
         type: "join_room",
@@ -313,26 +322,51 @@ export class RoomConnection {
       this.validateMessageForConnection(message);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new ServerMessageParseError("Unable to parse server message");
-      this.reportError(error, true);
+      this.reportError(error, true, () => this.getCurrentSocket(generation) !== null);
+      if (this.getCurrentSocket(generation) === null) {
+        return;
+      }
       this.handleTransportFailure(generation, error);
       return;
     }
 
     if (message.type === "pong") {
       this.handlePong(message.nonce, receivedAt);
+      if (this.getCurrentSocket(generation) === null) {
+        return;
+      }
     } else if (message.type === "error" && this.stateSnapshot.state === "joining") {
       this.updateSnapshot({ lastMessageAt: receivedAt });
-      this.notifyMessageListeners(message);
+      if (this.getCurrentSocket(generation) === null) {
+        return;
+      }
+      this.notifyMessageListeners(message, generation);
+      if (this.getCurrentSocket(generation) === null) {
+        return;
+      }
       this.handleJoinRejection(generation, message.code, message.message);
       return;
     } else if (message.type === "error") {
-      this.reportError(new Error(`${message.code}: ${message.message}`), true);
+      this.reportError(
+        new Error(`${message.code}: ${message.message}`),
+        true,
+        () => this.getCurrentSocket(generation) !== null,
+      );
+      if (this.getCurrentSocket(generation) === null) {
+        return;
+      }
       this.updateSnapshot({ lastMessageAt: receivedAt });
     } else if (message.type !== "joined") {
       this.updateSnapshot({ lastMessageAt: receivedAt });
     }
 
-    this.notifyMessageListeners(message);
+    if (this.getCurrentSocket(generation) === null) {
+      return;
+    }
+    this.notifyMessageListeners(message, generation);
+    if (this.getCurrentSocket(generation) === null) {
+      return;
+    }
 
     if (message.type === "joined") {
       this.updateSnapshot({
@@ -341,6 +375,9 @@ export class RoomConnection {
         reconnectAttempt: 0,
         lastError: null,
       });
+      if (this.getCurrentSocket(generation) === null) {
+        return;
+      }
       this.startHeartbeat();
       if (this.bootstrap !== null && !this.bootstrap.settled) {
         this.bootstrap.settled = true;
@@ -350,15 +387,29 @@ export class RoomConnection {
   }
 
   private validateMessageForConnection(message: ServerMessage): void {
-    if (message.type !== "joined") {
-      return;
-    }
-    if (
-      message.tableId !== this.config.tableId
-      || message.actorId !== this.config.actorId
-      || message.protocolVersion !== ROOM_PROTOCOL_VERSION
-    ) {
-      throw new ServerMessageParseError("joined message does not match the requested room identity or protocol version");
+    switch (message.type) {
+      case "joined":
+        if (
+          message.tableId !== this.config.tableId
+          || message.snapshot.tableId !== this.config.tableId
+          || message.actorId !== this.config.actorId
+          || message.protocolVersion !== ROOM_PROTOCOL_VERSION
+        ) {
+          throw new ServerMessageParseError("joined message does not match the requested room identity or protocol version");
+        }
+        return;
+      case "snapshot":
+        if (message.snapshot.tableId !== this.config.tableId) {
+          throw new ServerMessageParseError("snapshot message does not match the requested room identity");
+        }
+        return;
+      case "event":
+        if (message.event.tableId !== this.config.tableId) {
+          throw new ServerMessageParseError("event message does not match the requested room identity");
+        }
+        return;
+      default:
+        return;
     }
   }
 
@@ -388,11 +439,22 @@ export class RoomConnection {
     this.detachSocketListeners(activeSocket);
     this.clearHeartbeatTimer();
     if (activeSocket.socket.readyState <= WEB_SOCKET_OPEN_STATE) {
-      activeSocket.socket.close(JOIN_REJECTED_CLOSE_CODE, rejectionError.message);
+      this.safeClose(activeSocket.socket, JOIN_REJECTED_CLOSE_CODE, JOIN_REJECTED_CLOSE_REASON);
     }
-    this.reportError(rejectionError, true);
+    const recoveryGeneration = this.socketGeneration;
+    this.reportError(
+      rejectionError,
+      true,
+      () => !this.permanentlyClosed && this.socketGeneration === recoveryGeneration,
+    );
+    if (this.permanentlyClosed || this.socketGeneration !== recoveryGeneration) {
+      return;
+    }
     this.rejectBootstrap(rejectionError);
     this.transitionState("disconnected");
+    if (this.permanentlyClosed || this.socketGeneration !== recoveryGeneration) {
+      return;
+    }
 
     if (TRANSIENT_JOIN_ERROR_CODES.has(code)) {
       this.scheduleReconnect();
@@ -468,17 +530,39 @@ export class RoomConnection {
     this.outstandingPingNonce = null;
     this.outstandingPingSentAt = null;
     if (activeSocket.socket.readyState <= WEB_SOCKET_OPEN_STATE) {
-      activeSocket.socket.close(HEARTBEAT_CLOSE_CODE, error.message);
+      this.safeClose(activeSocket.socket, HEARTBEAT_CLOSE_CODE, TRANSPORT_FAILURE_CLOSE_REASON);
     }
-    this.reportError(error, true);
+    const recoveryGeneration = this.socketGeneration;
+    this.reportError(
+      error,
+      true,
+      () => !this.permanentlyClosed && this.socketGeneration === recoveryGeneration,
+    );
+    if (this.permanentlyClosed || this.socketGeneration !== recoveryGeneration) {
+      return;
+    }
     this.transitionState("disconnected");
+    if (this.permanentlyClosed || this.socketGeneration !== recoveryGeneration) {
+      return;
+    }
     this.scheduleReconnect();
   }
 
   private handleSocketCreationFailure(cause: unknown): void {
     const error = cause instanceof Error ? cause : new Error("WebSocket factory failed");
-    this.reportError(error, true);
+    const recoveryGeneration = this.socketGeneration;
+    this.reportError(
+      error,
+      true,
+      () => !this.permanentlyClosed && this.socketGeneration === recoveryGeneration,
+    );
+    if (this.permanentlyClosed || this.socketGeneration !== recoveryGeneration) {
+      return;
+    }
     this.transitionState("disconnected");
+    if (this.permanentlyClosed || this.socketGeneration !== recoveryGeneration) {
+      return;
+    }
     this.scheduleReconnect();
   }
 
@@ -488,7 +572,13 @@ export class RoomConnection {
     }
     const reconnectAttempt = this.stateSnapshot.reconnectAttempt + 1;
     this.updateSnapshot({ reconnectAttempt });
+    if (this.permanentlyClosed || this.reconnectTimer !== null || this.activeSocket !== null) {
+      return;
+    }
     this.transitionState("reconnecting");
+    if (this.permanentlyClosed || this.reconnectTimer !== null || this.activeSocket !== null) {
+      return;
+    }
     const exponentialDelayMs = Math.min(
       this.config.reconnectMaxDelayMs,
       this.config.reconnectBaseDelayMs * (2 ** (reconnectAttempt - 1)),
@@ -528,6 +618,18 @@ export class RoomConnection {
       return null;
     }
     return activeSocket;
+  }
+
+  private isCurrentSocket(activeSocket: ActiveSocket): boolean {
+    return this.getCurrentSocket(activeSocket.generation) === activeSocket;
+  }
+
+  private safeClose(socket: WebSocketLike, code: number, reason: string): void {
+    try {
+      socket.close(code, reason);
+    } catch {
+      // Cleanup and promise settlement must not depend on adapter close behavior.
+    }
   }
 
   private detachSocketListeners(activeSocket: ActiveSocket): void {
@@ -573,17 +675,28 @@ export class RoomConnection {
     }
   }
 
-  private notifyMessageListeners(message: ServerMessage): void {
+  private notifyMessageListeners(message: ServerMessage, generation: number): void {
     for (const listener of [...this.messageListeners]) {
       try {
         listener(message);
       } catch (cause) {
-        this.reportError(cause instanceof Error ? cause : new Error("Message listener failed"), false);
+        this.reportError(
+          cause instanceof Error ? cause : new Error("Message listener failed"),
+          false,
+          () => this.getCurrentSocket(generation) !== null,
+        );
+      }
+      if (this.getCurrentSocket(generation) === null) {
+        return;
       }
     }
   }
 
-  private reportError(error: Error, updateState: boolean): void {
+  private reportError(
+    error: Error,
+    updateState: boolean,
+    shouldContinue: () => boolean = () => !this.permanentlyClosed,
+  ): void {
     if (updateState) {
       this.stateSnapshot = Object.freeze({ ...this.stateSnapshot, lastError: error });
     }
@@ -592,6 +705,9 @@ export class RoomConnection {
         listener(error);
       } catch {
         // Error listeners are the final reporting boundary and must stay isolated.
+      }
+      if (!shouldContinue()) {
+        return;
       }
     }
   }
