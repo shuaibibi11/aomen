@@ -115,8 +115,8 @@ describe("client message parsing", () => {
     });
   });
 
-  it("uses protocol version 4 for room incarnation recovery", () => {
-    expect(ROOM_PROTOCOL_VERSION).toBe(4);
+  it("uses protocol version 5 for aggregate settlement safety", () => {
+    expect(ROOM_PROTOCOL_VERSION).toBe(5);
   });
 });
 

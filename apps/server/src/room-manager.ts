@@ -207,6 +207,11 @@ export class Room {
     // Fund every occupied seat so a later bet is never rejected for an empty
     // stack. Buy-in is a real intent, so the event log records the funding.
     const startingStack = options.startingStack ?? options.rulePack.limits.min * 100;
+    if (!Number.isSafeInteger(startingStack) || startingStack <= 0) {
+      throw new Error(
+        `startingStack must be a positive safe integer, got ${startingStack}`,
+      );
+    }
     this.applyIntentAndStore({
       type: "buy_in",
       actorId: options.humanActorId,

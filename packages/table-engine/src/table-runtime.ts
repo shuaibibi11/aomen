@@ -67,6 +67,35 @@ interface PlacedBet {
   readonly amount: number;
 }
 
+interface SettlementScenario {
+  readonly outcome: RoundOutcome;
+  readonly bankerTotal: number;
+  readonly playerPair: boolean;
+  readonly bankerPair: boolean;
+}
+
+interface SettlementPlanEntry {
+  readonly seatId: SeatId;
+  readonly payout: number;
+}
+
+type SettlementPlan = readonly SettlementPlanEntry[];
+
+const settlementScenarios: readonly SettlementScenario[] = (
+  ["player", "banker", "tie"] as const
+).flatMap((outcome) =>
+  [6, 7].flatMap((bankerTotal) =>
+    [false, true].flatMap((playerPair) =>
+      [false, true].map((bankerPair) => ({
+        outcome,
+        bankerTotal,
+        playerPair,
+        bankerPair,
+      })),
+    ),
+  ),
+);
+
 export class TableRuntime {
   private readonly tableId: TableId;
   private readonly rulePack: RulePack;
@@ -224,10 +253,17 @@ export class TableRuntime {
     if (!isBetAmountSettlementSafe(betKind, amount, this.rulePack)) {
       return { accepted: false, rejectReason: "invalid_bet_amount" };
     }
+    if (this.ledger.getStack(seatId) < amount) {
+      return { accepted: false, rejectReason: "insufficient_funds" };
+    }
+    const candidateBet: PlacedBet = { seatId, betKind, amount };
+    if (!this.isAggregateSettlementSafe(seatId, candidateBet)) {
+      return { accepted: false, rejectReason: "invalid_bet_amount" };
+    }
     if (!this.ledger.tryLockBet(seatId, amount)) {
       return { accepted: false, rejectReason: "insufficient_funds" };
     }
-    this.bets.push({ seatId, betKind, amount });
+    this.bets.push(candidateBet);
     return { accepted: true };
   }
 
@@ -307,8 +343,9 @@ export class TableRuntime {
     }
 
     const outcome = this.determineOutcome();
+    const settlementPlan = this.buildSettlementPlan(outcome);
+    this.applySettlementPlan(settlementPlan);
     this.outcome = outcome;
-    this.applyPayouts(outcome);
     this.phase = "round_end";
     return { accepted: true, outcome };
   }
@@ -386,28 +423,71 @@ export class TableRuntime {
     return "tie";
   }
 
-  /** Settle every bet into the ledger, aggregating per seat. */
-  private applyPayouts(outcome: RoundOutcome): void {
+  /** Build and fully validate every seat payout without mutating runtime state. */
+  private buildSettlementPlan(outcome: RoundOutcome): SettlementPlan {
     const bankerTotal = baccaratHandTotal(this.bankerCards);
     const playerPair = isFirstPair(this.playerCards);
     const bankerPair = isFirstPair(this.bankerCards);
-
-    // Sum payouts per seat so each seat's locked amount is cleared exactly once.
     const payoutBySeat = new Map<SeatId, number>();
+
     for (const bet of this.bets) {
       const payout = this.payoutForBet(bet, outcome, bankerTotal, playerPair, bankerPair);
-      payoutBySeat.set(bet.seatId, (payoutBySeat.get(bet.seatId) ?? 0) + payout);
+      const aggregatePayout = (payoutBySeat.get(bet.seatId) ?? 0) + payout;
+      if (!Number.isSafeInteger(aggregatePayout) || aggregatePayout < 0) {
+        throw new Error(
+          `settlement payout must be a non-negative safe integer, got ${aggregatePayout}`,
+        );
+      }
+      payoutBySeat.set(bet.seatId, aggregatePayout);
     }
 
-    for (const payout of payoutBySeat.values()) {
-      if (!Number.isSafeInteger(payout) || payout < 0) {
-        throw new Error(`settlement payout must be a non-negative safe integer, got ${payout}`);
+    const settlementPlan = [...payoutBySeat].map(([seatId, payout]) => ({ seatId, payout }));
+    for (const entry of settlementPlan) {
+      if (!this.ledger.canApplyPayout(entry.seatId, entry.payout)) {
+        throw new Error(
+          `settlement final stack must be a non-negative safe integer for seat ${entry.seatId}`,
+        );
       }
     }
+    return settlementPlan;
+  }
 
-    for (const [seatId, payout] of payoutBySeat) {
-      this.ledger.applyPayout(seatId, payout);
+  /** Apply a plan that has already passed all aggregate and ledger validation. */
+  private applySettlementPlan(settlementPlan: SettlementPlan): void {
+    for (const entry of settlementPlan) {
+      this.ledger.applyPayout(entry.seatId, entry.payout);
     }
+  }
+
+  /** Check this seat's existing bets plus a candidate under all payout paths. */
+  private isAggregateSettlementSafe(seatId: SeatId, candidateBet: PlacedBet): boolean {
+    const seatBets = [
+      ...this.bets.filter((bet) => bet.seatId === seatId),
+      candidateBet,
+    ];
+    const freeStackAfterLock = this.ledger.getStack(seatId) - candidateBet.amount;
+    if (!Number.isSafeInteger(freeStackAfterLock) || freeStackAfterLock < 0) {
+      return false;
+    }
+
+    return settlementScenarios.every((scenario) => {
+      let totalPayout = 0;
+      for (const bet of seatBets) {
+        const payout = this.payoutForBet(
+          bet,
+          scenario.outcome,
+          scenario.bankerTotal,
+          scenario.playerPair,
+          scenario.bankerPair,
+        );
+        totalPayout += payout;
+        if (!Number.isSafeInteger(totalPayout) || totalPayout < 0) {
+          return false;
+        }
+      }
+      const finalStack = freeStackAfterLock + totalPayout;
+      return Number.isSafeInteger(finalStack) && finalStack >= 0;
+    });
   }
 
   private payoutForBet(

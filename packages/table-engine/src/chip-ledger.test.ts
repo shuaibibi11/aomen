@@ -35,6 +35,14 @@ describe("ChipLedger buy-in", () => {
     expect(ledger.getStack(SEAT_1)).toBe(1500);
   });
 
+  it("rejects a buy-in that would overflow the accumulated stack", () => {
+    const ledger = new ChipLedger();
+    ledger.buyIn(SEAT_1, Number.MAX_SAFE_INTEGER);
+
+    expect(() => ledger.buyIn(SEAT_1, 1)).toThrow(/safe integer/);
+    expect(ledger.getStack(SEAT_1)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
   it("rejects a non-positive buy-in", () => {
     const ledger = new ChipLedger();
     expect(() => ledger.buyIn(SEAT_1, 0)).toThrow();
@@ -114,6 +122,17 @@ describe("ChipLedger applying payouts", () => {
     ledger.tryLockBet(SEAT_1, 300);
     ledger.applyPayout(SEAT_1, 300);
     expect(ledger.getStack(SEAT_1)).toBe(1000);
+    expect(ledger.getLocked(SEAT_1)).toBe(0);
+  });
+
+  it("reports and rejects a payout that would overflow without changing balances", () => {
+    const ledger = new ChipLedger();
+    ledger.buyIn(SEAT_1, Number.MAX_SAFE_INTEGER);
+
+    expect(ledger.canApplyPayout(SEAT_1, 0)).toBe(true);
+    expect(ledger.canApplyPayout(SEAT_1, 1)).toBe(false);
+    expect(() => ledger.applyPayout(SEAT_1, 1)).toThrow(/safe integer/);
+    expect(ledger.getStack(SEAT_1)).toBe(Number.MAX_SAFE_INTEGER);
     expect(ledger.getLocked(SEAT_1)).toBe(0);
   });
 });

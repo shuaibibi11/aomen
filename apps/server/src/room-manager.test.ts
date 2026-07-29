@@ -112,6 +112,22 @@ describe("RoomManager", () => {
     })).toThrow(/roomInstanceId must be a non-empty string/);
   });
 
+  it("rejects an unsafe default starting stack before creating the room", () => {
+    const manager = new RoomManager(new MemoryEventStore());
+    const pack = devPack();
+    pack.limits.min = Math.floor(Number.MAX_SAFE_INTEGER / 100) + 1;
+
+    expect(() => manager.createRoom({
+      tableId: asTableId("unsafe-starting-stack-table"),
+      rulePack: pack,
+      humanActorId: HUMAN,
+      joinCredential: JOIN_CREDENTIAL,
+      seatCount: 1,
+      aiCount: 0,
+      shoeSeed: "unsafe-starting-stack-seed",
+    })).toThrow(/startingStack must be a positive safe integer/);
+  });
+
   it("requires the configured human actor and credential together", () => {
     const { manager, room } = createRoom();
     const aiActorId = room

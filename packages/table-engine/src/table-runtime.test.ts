@@ -351,6 +351,104 @@ describe("TableRuntime authorisation", () => {
       expect(runtime.getSnapshot().bets).toEqual([]);
     },
   );
+
+  it("rejects a second individually safe bet when aggregate payout can overflow", () => {
+    const firstPairStake = Math.floor(Number.MAX_SAFE_INTEGER / 12) - 100;
+    const secondPairStake = 101;
+    const pack = standardPack();
+    pack.limits.max = firstPairStake;
+    const runtime = makeRuntime({ pack, cards: [c("9"), c("2"), c("K"), c("3")] });
+    runtime.submitIntent({
+      type: "buy_in",
+      actorId: ALICE,
+      seatId: SEAT_1,
+      amount: firstPairStake + secondPairStake,
+    });
+    runtime.submitIntent({ type: "start_round", actorId: DEALER });
+
+    const first = runtime.submitIntent({
+      type: "place_bet",
+      actorId: ALICE,
+      seatId: SEAT_1,
+      betKind: "player_pair",
+      amount: firstPairStake,
+    });
+    const stackBeforeSecondBet = runtime.getStack(SEAT_1);
+    const second = runtime.submitIntent({
+      type: "place_bet",
+      actorId: ALICE,
+      seatId: SEAT_1,
+      betKind: "player_pair",
+      amount: secondPairStake,
+    });
+
+    expect(first.accepted).toBe(true);
+    expect(second.accepted).toBe(false);
+    expect(second.rejectReason).toBe("invalid_bet_amount");
+    expect(runtime.getStack(SEAT_1)).toBe(stackBeforeSecondBet);
+    expect(runtime.getSnapshot().bets).toHaveLength(1);
+  });
+
+  it("rejects a second bet when aggregate payout would overflow the final stack", () => {
+    const pack = standardPack();
+    pack.limits.max = 100;
+    const runtime = makeRuntime({ pack, cards: [c("9"), c("2"), c("K"), c("3")] });
+    runtime.submitIntent({
+      type: "buy_in",
+      actorId: ALICE,
+      seatId: SEAT_1,
+      amount: Number.MAX_SAFE_INTEGER - 150,
+    });
+    runtime.submitIntent({ type: "start_round", actorId: DEALER });
+    const first = runtime.submitIntent({
+      type: "place_bet",
+      actorId: ALICE,
+      seatId: SEAT_1,
+      betKind: "player",
+      amount: 100,
+    });
+    const stackBeforeSecondBet = runtime.getStack(SEAT_1);
+
+    const second = runtime.submitIntent({
+      type: "place_bet",
+      actorId: ALICE,
+      seatId: SEAT_1,
+      betKind: "player",
+      amount: 100,
+    });
+
+    expect(first.accepted).toBe(true);
+    expect(second.accepted).toBe(false);
+    expect(second.rejectReason).toBe("invalid_bet_amount");
+    expect(runtime.getStack(SEAT_1)).toBe(stackBeforeSecondBet);
+    expect(runtime.getSnapshot().bets).toHaveLength(1);
+  });
+
+  it("accepts normal multiple bets when every aggregate settlement is safe", () => {
+    const runtime = makeRuntime({ cards: [c("9"), c("2"), c("K"), c("3")] });
+    runtime.submitIntent({ type: "buy_in", actorId: ALICE, seatId: SEAT_1, amount: 1000 });
+    runtime.submitIntent({ type: "start_round", actorId: DEALER });
+
+    const playerBet = runtime.submitIntent({
+      type: "place_bet",
+      actorId: ALICE,
+      seatId: SEAT_1,
+      betKind: "player",
+      amount: 100,
+    });
+    const tieBet = runtime.submitIntent({
+      type: "place_bet",
+      actorId: ALICE,
+      seatId: SEAT_1,
+      betKind: "tie",
+      amount: 100,
+    });
+
+    expect(playerBet.accepted).toBe(true);
+    expect(tieBet.accepted).toBe(true);
+    expect(runtime.getStack(SEAT_1)).toBe(800);
+    expect(runtime.getSnapshot().bets).toHaveLength(2);
+  });
 });
 
 describe("TableRuntime no-commission banker six", () => {
@@ -419,11 +517,18 @@ describe("TableRuntime side bets", () => {
     runtime.submitIntent({ type: "deal_next", actorId: DEALER });
     dealToSettling(runtime);
 
+    const snapshotBeforeSettlement = runtime.getSnapshot();
+    const eventsBeforeSettlement = [...runtime.getEvents()];
+
     expect(() => runtime.submitIntent({ type: "settle_round", actorId: DEALER })).toThrow(
       /non-negative safe integer/,
     );
     expect(runtime.getStack(SEAT_1)).toBe(900);
     expect(runtime.getStack(SEAT_2)).toBe(900);
+    expect(runtime.getSnapshot()).toEqual(snapshotBeforeSettlement);
+    expect(runtime.getSnapshot().phase).toBe("settling");
+    expect(runtime.getSnapshot().outcome).toBeNull();
+    expect(runtime.getEvents()).toEqual(eventsBeforeSettlement);
   });
 });
 
