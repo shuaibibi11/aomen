@@ -7,6 +7,7 @@ import {
   type AutomaticRoundTiming,
 } from "./automatic-round-scheduler.js";
 import { MemoryEventStore } from "./memory-event-store.js";
+import type { EventStore } from "./memory-event-store.js";
 import type { RoomUpdate } from "./room-events.js";
 import { RoomManager } from "./room-manager.js";
 
@@ -51,6 +52,18 @@ function createRealRoom() {
     shoeSeed: "scheduler-seed",
   });
   return { humanActorId, room, roomManager, store, tableId };
+}
+
+function expectNoRejectedStartRound(
+  store: MemoryEventStore,
+  tableId: ReturnType<typeof asTableId>,
+): void {
+  const rejectedStartRounds = store
+    .listByTable(tableId)
+    .filter(
+      (event) => event.intent?.type === "start_round" && event.accepted !== true,
+    );
+  expect(rejectedStartRounds).toHaveLength(0);
 }
 
 async function advance(milliseconds: number): Promise<void> {
@@ -110,7 +123,8 @@ describe("AutomaticRoundScheduler", () => {
     const aiBets = new Promise<void>((resolve) => {
       resolveAiBets = resolve;
     });
-    let phase = "idle" as ReturnType<AutomaticRoundRoom["getAutomaticRoundPhase"]>;
+    let phase: ReturnType<AutomaticRoundRoom["getAutomaticRoundPhase"]> =
+      "shoe_ready";
     const room: AutomaticRoundRoom = {
       startAutomaticRound: vi.fn(() => {
         phase = "round_betting";
@@ -301,6 +315,125 @@ describe("AutomaticRoundScheduler", () => {
     expect(onError).toHaveBeenCalledWith(thrownError);
     expect(scheduler.isRunning()).toBe(false);
     expect(room.closeAutomaticBetting).not.toHaveBeenCalled();
+  });
+
+  it("reports a scheduled store append failure after the room faults", async () => {
+    const backingStore = new MemoryEventStore();
+    let failNextAppend = false;
+    const appendError = new Error("scheduled append failed");
+    const store: EventStore = {
+      append: (event) => {
+        if (failNextAppend) {
+          failNextAppend = false;
+          throw appendError;
+        }
+        backingStore.append(event);
+      },
+      listByTable: (tableId) => backingStore.listByTable(tableId),
+      count: () => backingStore.count(),
+    };
+    const tableId = asTableId("scheduler-store-fault-table");
+    const roomManager = new RoomManager(store);
+    const room = roomManager.createRoom({
+      tableId,
+      rulePack: createRulePack(),
+      humanActorId: asActorId("scheduler-store-fault-human"),
+      joinCredential: "scheduler-credential",
+      seatCount: 3,
+      aiCount: 2,
+      shoeSeed: "scheduler-store-fault-seed",
+    });
+    const onError = vi.fn();
+    const scheduler = new AutomaticRoundScheduler(room, TIMING, { onError });
+
+    scheduler.start();
+    await advance(0);
+    failNextAppend = true;
+    await advance(TIMING.bettingWindowMs);
+    await advance(100_000);
+
+    expect(room.isFaulted()).toBe(true);
+    expect(scheduler.isRunning()).toBe(false);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ rootCause: appendError }),
+    );
+  });
+
+  it("does not start a faulted room and reports the condition", () => {
+    const onError = vi.fn();
+    const room: AutomaticRoundRoom = {
+      startAutomaticRound: vi.fn(),
+      placeAutomaticPlayerBets: vi.fn(),
+      closeAutomaticBetting: vi.fn(),
+      dealNextAutomaticCard: vi.fn(),
+      settleAutomaticRound: vi.fn(),
+      getAutomaticRoundPhase: vi.fn(() => "shoe_ready"),
+      isFaulted: vi.fn(() => true),
+    };
+    const scheduler = new AutomaticRoundScheduler(room, TIMING, { onError });
+
+    scheduler.start();
+
+    expect(scheduler.isRunning()).toBe(false);
+    expect(room.startAutomaticRound).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledOnce();
+  });
+
+  it("resumes a real room in round_betting with a fresh full betting window", async () => {
+    const { room, store, tableId } = createRealRoom();
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+    scheduler.start();
+    await advance(400);
+    scheduler.stop();
+
+    scheduler.start();
+    await advance(TIMING.bettingWindowMs - 1);
+    expect(room.getSnapshot().phase).toBe("round_betting");
+    await advance(1);
+    expect(room.getSnapshot().phase).toBe("no_more_bets");
+
+    while (room.getSnapshot().phase !== "round_end") {
+      await advance(TIMING.cardDealIntervalMs);
+    }
+    expectNoRejectedStartRound(store, tableId);
+  });
+
+  it("resumes a real room in dealing and completes the current round", async () => {
+    const { room, store, tableId } = createRealRoom();
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+    scheduler.start();
+    await advance(TIMING.bettingWindowMs + TIMING.cardDealIntervalMs);
+    expect(room.getSnapshot().phase).toBe("dealing");
+    scheduler.stop();
+
+    scheduler.start();
+    while (room.getSnapshot().phase !== "round_end") {
+      await advance(TIMING.cardDealIntervalMs);
+    }
+
+    expect(room.getSnapshot().outcome).not.toBeNull();
+    expectNoRejectedStartRound(store, tableId);
+  });
+
+  it("resumes a real room in settling and completes the current round", async () => {
+    const { room, store, tableId } = createRealRoom();
+    room.startAutomaticRound();
+    room.closeAutomaticBetting();
+    do {
+      room.dealNextAutomaticCard();
+    } while (room.getSnapshot().phase === "dealing");
+    expect(room.getSnapshot().phase).toBe("settling");
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+
+    scheduler.start();
+    scheduler.stop();
+    scheduler.start();
+    await advance(0);
+
+    expect(room.getSnapshot().phase).toBe("round_end");
+    expect(room.getSnapshot().outcome).not.toBeNull();
+    expectNoRejectedStartRound(store, tableId);
   });
 
   it("does not continue after stop while asynchronous AI betting is pending", async () => {

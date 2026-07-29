@@ -66,11 +66,16 @@ export class AutomaticRoundScheduler {
       return;
     }
 
+    if (this.room.isFaulted()) {
+      this.reportError(new Error("Cannot start automatic round scheduler for a faulted room"));
+      return;
+    }
+
     this.running = true;
     this.runGeneration += 1;
     const generation = this.runGeneration;
     try {
-      this.beginRound(generation);
+      this.resumeFromCurrentPhase(generation);
     } catch (error) {
       this.fail(error, generation);
     }
@@ -99,6 +104,10 @@ export class AutomaticRoundScheduler {
     );
   }
 
+  private isCurrentGeneration(generation: number): boolean {
+    return this.running && this.runGeneration === generation;
+  }
+
   private assertActive(generation: number): boolean {
     if (this.room.isFaulted()) {
       this.stop();
@@ -112,6 +121,41 @@ export class AutomaticRoundScheduler {
       return;
     }
     this.room.startAutomaticRound();
+    this.aiTaskController?.abort();
+    const aiTaskController = new AbortController();
+    this.aiTaskController = aiTaskController;
+    this.startAiBetting(generation, aiTaskController);
+    this.schedule(this.timing.bettingWindowMs, generation, () =>
+      this.finishBetting(generation),
+    );
+  }
+
+  private resumeFromCurrentPhase(generation: number): void {
+    if (!this.assertActive(generation)) {
+      return;
+    }
+
+    const phase = this.room.getAutomaticRoundPhase();
+    switch (phase) {
+      case "shoe_ready":
+      case "round_end":
+        this.beginRound(generation);
+        return;
+      case "round_betting":
+        this.resumeBetting(generation);
+        return;
+      case "no_more_bets":
+      case "dealing":
+        this.scheduleNextCard(generation);
+        return;
+      case "settling":
+        this.schedule(0, generation, () => this.finishSettlement(generation));
+        return;
+    }
+  }
+
+  /** Restart AI decisions and grant the resumed round a complete betting window. */
+  private resumeBetting(generation: number): void {
     this.aiTaskController?.abort();
     const aiTaskController = new AbortController();
     this.aiTaskController = aiTaskController;
@@ -176,13 +220,17 @@ export class AutomaticRoundScheduler {
         throw new Error(`Automatic card deal reached unexpected phase: ${phase}`);
       }
 
-      this.room.settleAutomaticRound();
-      this.schedule(
-        this.timing.settlementDisplayMs + this.timing.interRoundDelayMs,
-        generation,
-        () => this.beginRound(generation),
-      );
+      this.finishSettlement(generation);
     });
+  }
+
+  private finishSettlement(generation: number): void {
+    this.room.settleAutomaticRound();
+    this.schedule(
+      this.timing.settlementDisplayMs + this.timing.interRoundDelayMs,
+      generation,
+      () => this.beginRound(generation),
+    );
   }
 
   private schedule(
@@ -205,10 +253,16 @@ export class AutomaticRoundScheduler {
   }
 
   private fail(error: unknown, generation: number): void {
-    if (!this.isActive(generation)) {
+    // Room actions can fault the room before throwing. Only a superseded run
+    // may suppress its error; the current run must always clean up and report.
+    if (!this.isCurrentGeneration(generation)) {
       return;
     }
     this.stop();
+    this.reportError(error);
+  }
+
+  private reportError(error: unknown): void {
     try {
       this.onError(error);
     } catch (reportingError) {
