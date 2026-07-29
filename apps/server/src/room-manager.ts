@@ -31,6 +31,12 @@ import type {
   UnsubscribeRoomUpdates,
 } from "./room-events.js";
 
+type AiBetDecision = Awaited<ReturnType<BasicPlayerAi["decideBet"]>>;
+
+interface AiDecisionCacheEntry {
+  readonly decisionPromise: Promise<AiBetDecision>;
+}
+
 export interface CreateRoomOptions {
   readonly tableId: TableId;
   readonly rulePack: RulePack;
@@ -94,6 +100,7 @@ export class Room {
   private readonly allowedClientActorIds: ReadonlySet<ActorId>;
   private readonly aiSeats: readonly SeatedAi[];
   private readonly store: EventStore;
+  private readonly aiDecisionCache = new Map<string, AiDecisionCacheEntry>();
   private fault: RoomFaultedError | null = null;
 
   constructor(
@@ -291,7 +298,15 @@ export class Room {
         continue;
       }
 
-      const bet = await seated.ai.decideBet();
+      const decisionKey = `${snapshotBeforeDecision.roundId}:${seated.seatId}`;
+      let decisionEntry = this.aiDecisionCache.get(decisionKey);
+      if (decisionEntry === undefined) {
+        const decisionPromise = Promise.resolve().then(() => seated.ai.decideBet());
+        decisionEntry = { decisionPromise };
+        this.aiDecisionCache.set(decisionKey, decisionEntry);
+      }
+
+      const bet = await decisionEntry.decisionPromise;
       const snapshotAfterDecision = this.runtime.getSnapshot();
       if (signal.aborted || snapshotAfterDecision.phase !== "round_betting") {
         return;

@@ -19,6 +19,9 @@ export interface AutomaticRoundRoom {
 
 export interface AutomaticRoundSchedulerOptions {
   readonly onError?: (error: unknown) => void;
+  readonly clock?: {
+    now(): number;
+  };
 }
 
 const DEFAULT_ERROR_HANDLER = (error: unknown): void => {
@@ -51,6 +54,9 @@ export class AutomaticRoundScheduler {
   private runGeneration = 0;
   private aiTaskController: AbortController | null = null;
   private readonly onError: (error: unknown) => void;
+  private readonly clock: { now(): number };
+  private bettingDeadlineAt: number | null = null;
+  private nextRoundAt: number | null = null;
 
   constructor(
     private readonly room: AutomaticRoundRoom,
@@ -59,6 +65,7 @@ export class AutomaticRoundScheduler {
   ) {
     validateTiming(timing);
     this.onError = options.onError ?? DEFAULT_ERROR_HANDLER;
+    this.clock = options.clock ?? { now: () => Date.now() };
   }
 
   start(): void {
@@ -121,6 +128,8 @@ export class AutomaticRoundScheduler {
       return;
     }
     this.room.startAutomaticRound();
+    this.bettingDeadlineAt = this.clock.now() + this.timing.bettingWindowMs;
+    this.nextRoundAt = null;
     this.aiTaskController?.abort();
     const aiTaskController = new AbortController();
     this.aiTaskController = aiTaskController;
@@ -138,8 +147,10 @@ export class AutomaticRoundScheduler {
     const phase = this.room.getAutomaticRoundPhase();
     switch (phase) {
       case "shoe_ready":
-      case "round_end":
         this.beginRound(generation);
+        return;
+      case "round_end":
+        this.resumeRoundEnd(generation);
         return;
       case "round_betting":
         this.resumeBetting(generation);
@@ -154,14 +165,29 @@ export class AutomaticRoundScheduler {
     }
   }
 
-  /** Restart AI decisions and grant the resumed round a complete betting window. */
+  /** Restart AI submission while preserving the original betting deadline. */
   private resumeBetting(generation: number): void {
     this.aiTaskController?.abort();
     const aiTaskController = new AbortController();
     this.aiTaskController = aiTaskController;
     this.startAiBetting(generation, aiTaskController);
-    this.schedule(this.timing.bettingWindowMs, generation, () =>
+    if (this.bettingDeadlineAt === null) {
+      this.bettingDeadlineAt = this.clock.now() + this.timing.bettingWindowMs;
+    }
+    this.schedule(this.remainingDelay(this.bettingDeadlineAt), generation, () =>
       this.finishBetting(generation),
+    );
+  }
+
+  private resumeRoundEnd(generation: number): void {
+    if (this.nextRoundAt === null) {
+      this.nextRoundAt =
+        this.clock.now() +
+        this.timing.settlementDisplayMs +
+        this.timing.interRoundDelayMs;
+    }
+    this.schedule(this.remainingDelay(this.nextRoundAt), generation, () =>
+      this.beginRound(generation),
     );
   }
 
@@ -226,11 +252,19 @@ export class AutomaticRoundScheduler {
 
   private finishSettlement(generation: number): void {
     this.room.settleAutomaticRound();
+    this.nextRoundAt =
+      this.clock.now() +
+      this.timing.settlementDisplayMs +
+      this.timing.interRoundDelayMs;
     this.schedule(
-      this.timing.settlementDisplayMs + this.timing.interRoundDelayMs,
+      this.remainingDelay(this.nextRoundAt),
       generation,
       () => this.beginRound(generation),
     );
+  }
+
+  private remainingDelay(deadlineAt: number): number {
+    return Math.max(0, deadlineAt - this.clock.now());
   }
 
   private schedule(

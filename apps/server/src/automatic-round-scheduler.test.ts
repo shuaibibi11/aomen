@@ -315,6 +315,107 @@ describe("AutomaticRoundScheduler", () => {
     expect(getAiBetEvents()).toHaveLength(4);
   });
 
+  it("reuses an in-flight AI decision after stop and restart", async () => {
+    const { humanActorId, room, store, tableId } = createRealRoom();
+    const firstAiSeat = (
+      room as unknown as {
+        aiSeats: Array<{
+          ai: { decideBet: () => unknown };
+        }>;
+      }
+    ).aiSeats[0];
+    if (firstAiSeat === undefined) {
+      throw new Error("Expected a seated AI for the restart test");
+    }
+    const originalDecision = firstAiSeat.ai.decideBet();
+    let resolveDecision!: (decision: unknown) => void;
+    const decideBet = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveDecision = resolve;
+        }),
+    );
+    firstAiSeat.ai.decideBet = decideBet;
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+
+    scheduler.start();
+    await advance(0);
+    scheduler.stop();
+    scheduler.start();
+    await advance(0);
+    expect(decideBet).toHaveBeenCalledOnce();
+
+    resolveDecision(originalDecision);
+    await advance(0);
+    const firstAiActorId = room
+      .getSnapshot()
+      .seats.find((seat) => seat.seatId === (originalDecision as { seatId: string }).seatId)
+      ?.occupantId;
+    const firstAiBets = store
+      .listByTable(tableId)
+      .filter(
+        (event) =>
+          event.intent?.type === "place_bet" && event.actorId === firstAiActorId,
+      );
+    expect(firstAiBets).toHaveLength(1);
+    expect(firstAiBets[0]?.actorId).not.toBe(humanActorId);
+  });
+
+  it("caches a null AI decision across stop and restart", async () => {
+    const { room } = createRealRoom();
+    const firstAiSeat = (
+      room as unknown as {
+        aiSeats: Array<{
+          ai: { decideBet: () => unknown };
+        }>;
+      }
+    ).aiSeats[0];
+    if (firstAiSeat === undefined) {
+      throw new Error("Expected a seated AI for the null-decision test");
+    }
+    const decideBet = vi.fn(() => null);
+    firstAiSeat.ai.decideBet = decideBet;
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+
+    scheduler.start();
+    await advance(0);
+    scheduler.stop();
+    scheduler.start();
+    await advance(0);
+
+    expect(decideBet).toHaveBeenCalledOnce();
+  });
+
+  it("requests a new AI decision in the next round", async () => {
+    const { room } = createRealRoom();
+    const firstAiSeat = (
+      room as unknown as {
+        aiSeats: Array<{
+          ai: { decideBet: () => unknown };
+        }>;
+      }
+    ).aiSeats[0];
+    if (firstAiSeat === undefined) {
+      throw new Error("Expected a seated AI for the next-round test");
+    }
+    const originalDecision = firstAiSeat.ai.decideBet();
+    const decideBet = vi.fn(() => originalDecision);
+    firstAiSeat.ai.decideBet = decideBet;
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+
+    scheduler.start();
+    await advance(0);
+    await advance(TIMING.bettingWindowMs);
+    while (room.getSnapshot().phase !== "round_end") {
+      await advance(TIMING.cardDealIntervalMs);
+    }
+    await advance(TIMING.settlementDisplayMs + TIMING.interRoundDelayMs);
+    await advance(0);
+
+    expect(room.getSnapshot().phase).toBe("round_betting");
+    expect(decideBet).toHaveBeenCalledTimes(2);
+  });
+
   it("stops before the next action when the room becomes faulted", async () => {
     let roomIsFaulted = false;
     const room: AutomaticRoundRoom = {
@@ -425,15 +526,16 @@ describe("AutomaticRoundScheduler", () => {
     expect(onError).toHaveBeenCalledOnce();
   });
 
-  it("resumes a real room in round_betting with a fresh full betting window", async () => {
+  it("preserves the remaining betting window across stop and start", async () => {
     const { room, store, tableId } = createRealRoom();
-    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+    const eightSecondTiming = { ...TIMING, bettingWindowMs: 8_000 };
+    const scheduler = new AutomaticRoundScheduler(room, eightSecondTiming);
     scheduler.start();
-    await advance(400);
+    await advance(7_000);
     scheduler.stop();
 
     scheduler.start();
-    await advance(TIMING.bettingWindowMs - 1);
+    await advance(999);
     expect(room.getSnapshot().phase).toBe("round_betting");
     await advance(1);
     expect(room.getSnapshot().phase).toBe("no_more_bets");
@@ -442,6 +544,68 @@ describe("AutomaticRoundScheduler", () => {
       await advance(TIMING.cardDealIntervalMs);
     }
     expectNoRejectedStartRound(store, tableId);
+  });
+
+  it("closes betting immediately when its preserved deadline has expired", async () => {
+    const { room } = createRealRoom();
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+    scheduler.start();
+    await advance(TIMING.bettingWindowMs - 100);
+    scheduler.stop();
+
+    await advance(200);
+    scheduler.start();
+    await advance(0);
+
+    expect(room.getSnapshot().phase).toBe("no_more_bets");
+  });
+
+  it("preserves the remaining round-end display delay across stop and start", async () => {
+    let phase: ReturnType<AutomaticRoundRoom["getAutomaticRoundPhase"]> =
+      "settling";
+    const room: AutomaticRoundRoom = {
+      startAutomaticRound: vi.fn(() => {
+        phase = "round_betting";
+      }),
+      placeAutomaticPlayerBets: vi.fn(),
+      closeAutomaticBetting: vi.fn(),
+      dealNextAutomaticCard: vi.fn(),
+      settleAutomaticRound: vi.fn(() => {
+        phase = "round_end";
+      }),
+      getAutomaticRoundPhase: vi.fn(() => phase),
+      isFaulted: vi.fn(() => false),
+    };
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+    scheduler.start();
+    await advance(0);
+    await advance(TIMING.settlementDisplayMs + TIMING.interRoundDelayMs - 100);
+    scheduler.stop();
+
+    scheduler.start();
+    await advance(99);
+    expect(room.startAutomaticRound).not.toHaveBeenCalled();
+    await advance(1);
+    expect(room.startAutomaticRound).toHaveBeenCalledOnce();
+  });
+
+  it("waits a complete configured delay when first attached in round_end", async () => {
+    const room: AutomaticRoundRoom = {
+      startAutomaticRound: vi.fn(),
+      placeAutomaticPlayerBets: vi.fn(),
+      closeAutomaticBetting: vi.fn(),
+      dealNextAutomaticCard: vi.fn(),
+      settleAutomaticRound: vi.fn(),
+      getAutomaticRoundPhase: vi.fn(() => "round_end"),
+      isFaulted: vi.fn(() => false),
+    };
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+
+    scheduler.start();
+    await advance(TIMING.settlementDisplayMs + TIMING.interRoundDelayMs - 1);
+    expect(room.startAutomaticRound).not.toHaveBeenCalled();
+    await advance(1);
+    expect(room.startAutomaticRound).toHaveBeenCalledOnce();
   });
 
   it("resumes a real room in dealing and completes the current round", async () => {
