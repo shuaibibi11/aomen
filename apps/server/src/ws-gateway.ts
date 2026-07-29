@@ -207,6 +207,14 @@ export class WsGateway {
       });
       return;
     }
+    if (!room.isClientIntentAllowed(message.intent)) {
+      this.send(socket, {
+        type: "error",
+        code: "intent_not_allowed",
+        message: "This intent is not allowed for the joined actor and seat",
+      });
+      return;
+    }
 
     try {
       room.submitIntent(message.intent);

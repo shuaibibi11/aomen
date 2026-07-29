@@ -11,7 +11,7 @@ import {
   type TableId,
 } from "@mct/shared";
 import type { EventStore } from "./memory-event-store.js";
-import { RoomManager } from "./room-manager.js";
+import { RoomFaultedError, RoomManager } from "./room-manager.js";
 import { getIntentActorError, WsGateway } from "./ws-gateway.js";
 
 const openGateways: WsGateway[] = [];
@@ -204,46 +204,96 @@ describe("WsGateway room delivery", () => {
     secondSocket.close();
   });
 
-  it("broadcasts rejected event and snapshot updates to every joined client", async () => {
-    const { humanActorId, tableId, url } = await createGateway();
-    const firstSocket = await connectClient(url);
-    const secondSocket = await connectClient(url);
-    await Promise.all([
-      joinClient(firstSocket, tableId, humanActorId),
-      joinClient(secondSocket, tableId, humanActorId),
-    ]);
-    const firstEvent = waitForMessage(
-      firstSocket,
-      (message) => message.type === "event" && message.event.accepted === false,
-    );
-    const firstSnapshot = waitForMessage(firstSocket, (message) => message.type === "snapshot");
-    const secondEvent = waitForMessage(
-      secondSocket,
-      (message) => message.type === "event" && message.event.accepted === false,
-    );
-    const secondSnapshot = waitForMessage(secondSocket, (message) => message.type === "snapshot");
+  it("rejects socket attempts to buy into an AI seat without changing room state", async () => {
+    const { humanActorId, room, store, tableId, url } = await createGateway();
+    const socket = await connectClient(url);
+    await joinClient(socket, tableId, humanActorId);
+    const aiSeatId = room
+      .getSnapshot()
+      .seats.find((seat) => seat.occupantId !== humanActorId)?.seatId;
+    expect(aiSeatId).toBeDefined();
+    const snapshotBefore = room.getSnapshot();
+    const eventCountBefore = store.count();
+    const response = waitForMessage(socket, (message) => message.type === "error");
 
-    firstSocket.send(
+    socket.send(
+      JSON.stringify({
+        type: "submit_intent",
+        intent: {
+          type: "buy_in",
+          actorId: humanActorId,
+          seatId: aiSeatId,
+          amount: 100,
+        },
+      }),
+    );
+
+    expect(await response).toMatchObject({
+      type: "error",
+      code: "intent_not_allowed",
+    });
+    expect(room.getSnapshot()).toEqual(snapshotBefore);
+    expect(store.count()).toBe(eventCountBefore);
+    socket.close();
+  });
+
+  it("rejects dealer-only socket intents without changing room state", async () => {
+    const { humanActorId, room, store, tableId, url } = await createGateway();
+    const socket = await connectClient(url);
+    await joinClient(socket, tableId, humanActorId);
+    const snapshotBefore = room.getSnapshot();
+    const eventCountBefore = store.count();
+    const response = waitForMessage(socket, (message) => message.type === "error");
+
+    socket.send(
       JSON.stringify({
         type: "submit_intent",
         intent: { type: "start_round", actorId: humanActorId },
       }),
     );
 
-    const messages = await Promise.all([
-      firstEvent,
-      firstSnapshot,
-      secondEvent,
-      secondSnapshot,
-    ]);
-    const events = messages.filter((message) => message.type === "event");
-    expect(events).toHaveLength(2);
-    expect(events[0]).toMatchObject({
-      type: "event",
-      event: { accepted: false, rejectReason: "not_authorised" },
+    expect(await response).toMatchObject({
+      type: "error",
+      code: "intent_not_allowed",
     });
-    firstSocket.close();
-    secondSocket.close();
+    expect(room.getSnapshot()).toEqual(snapshotBefore);
+    expect(store.count()).toBe(eventCountBefore);
+    socket.close();
+  });
+
+  it("allows the joined human to bet from their authorized seat", async () => {
+    const { humanActorId, room, store, tableId, url } = await createGateway();
+    const socket = await connectClient(url);
+    await joinClient(socket, tableId, humanActorId);
+    room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+    const eventCountBefore = store.count();
+    const acceptedBet = waitForMessage(
+      socket,
+      (message) =>
+        message.type === "event" &&
+        message.event.intent?.type === "place_bet" &&
+        message.event.accepted,
+    );
+
+    socket.send(
+      JSON.stringify({
+        type: "submit_intent",
+        intent: {
+          type: "place_bet",
+          actorId: humanActorId,
+          seatId: room.getHumanSeatId(),
+          betKind: "player",
+          amount: 100,
+        },
+      }),
+    );
+
+    expect(await acceptedBet).toMatchObject({
+      type: "event",
+      event: { accepted: true, actorId: humanActorId },
+    });
+    expect(store.count()).toBe(eventCountBefore + 1);
+    socket.close();
   });
 
   it("reports internal failures but sends a stable non-sensitive message", async () => {
@@ -275,7 +325,10 @@ describe("WsGateway room delivery", () => {
       message: "Intent submission failed",
     });
     expect(reportedErrors).toHaveLength(1);
-    expect(reportedErrors[0]).toEqual(new Error("sensitive database detail"));
+    expect(reportedErrors[0]).toBeInstanceOf(RoomFaultedError);
+    expect((reportedErrors[0] as RoomFaultedError).rootCause).toEqual(
+      new Error("sensitive database detail"),
+    );
     socket.close();
   });
 

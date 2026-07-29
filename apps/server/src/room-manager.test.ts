@@ -6,10 +6,16 @@
  * event to the store. These run without opening a socket.
  */
 import { describe, expect, it } from "vitest";
-import { asActorId, asTableId, SYSTEM_DEALER } from "@mct/shared";
+import {
+  asActorId,
+  asTableId,
+  SYSTEM_DEALER,
+  type TableEvent,
+  type TableId,
+} from "@mct/shared";
 import type { RulePack } from "@mct/rule-packs";
-import { MemoryEventStore } from "./memory-event-store.js";
-import { RoomManager } from "./room-manager.js";
+import { MemoryEventStore, type EventStore } from "./memory-event-store.js";
+import { RoomFaultedError, RoomManager } from "./room-manager.js";
 
 function devPack(): RulePack {
   return {
@@ -47,6 +53,28 @@ function createRoom() {
   return { store, manager, room };
 }
 
+class FailingEventStore implements EventStore {
+  private readonly events: TableEvent[] = [];
+  shouldFailAppend = false;
+  appendAttempts = 0;
+
+  append(event: TableEvent): void {
+    this.appendAttempts += 1;
+    if (this.shouldFailAppend) {
+      throw new Error("append failed");
+    }
+    this.events.push(event);
+  }
+
+  listByTable(tableId: TableId): readonly TableEvent[] {
+    return this.events.filter((event) => event.tableId === tableId);
+  }
+
+  count(): number {
+    return this.events.length;
+  }
+}
+
 describe("RoomManager", () => {
   it("allows only the room's human actor to join as a client", () => {
     const { manager, room } = createRoom();
@@ -61,6 +89,35 @@ describe("RoomManager", () => {
     expect(aiActorId).toBeDefined();
     expect(room.isClientActorAllowed(aiActorId!)).toBe(false);
     expect(room.isClientActorAllowed(SYSTEM_DEALER)).toBe(false);
+  });
+
+  it("authorizes ordinary client intents only for the human actor and seat", () => {
+    const { room } = createRoom();
+    const aiSeatId = room
+      .getSnapshot()
+      .seats.find((seat) => seat.occupantId !== HUMAN)?.seatId;
+    expect(aiSeatId).toBeDefined();
+
+    expect(
+      room.isClientIntentAllowed({
+        type: "place_bet",
+        actorId: HUMAN,
+        seatId: room.getHumanSeatId(),
+        betKind: "player",
+        amount: 100,
+      }),
+    ).toBe(true);
+    expect(
+      room.isClientIntentAllowed({
+        type: "buy_in",
+        actorId: HUMAN,
+        seatId: aiSeatId!,
+        amount: 100,
+      }),
+    ).toBe(false);
+    expect(
+      room.isClientIntentAllowed({ type: "start_round", actorId: HUMAN }),
+    ).toBe(false);
   });
 
   it("funds every seat at creation", () => {
@@ -205,5 +262,49 @@ describe("RoomManager", () => {
     expect(first.room.getSnapshot().outcome).toBe(
       second.room.getSnapshot().outcome,
     );
+  });
+
+  it("faults permanently after append failure and rejects further operations", () => {
+    const store = new FailingEventStore();
+    const manager = new RoomManager(store);
+    const room = manager.createRoom({
+      tableId: TABLE_ID,
+      rulePack: devPack(),
+      humanActorId: HUMAN,
+      seatCount: 2,
+      aiCount: 1,
+      shoeSeed: "fault-seed",
+    });
+    room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+    store.shouldFailAppend = true;
+
+    expect(() =>
+      room.submitIntent({
+        type: "place_bet",
+        actorId: HUMAN,
+        seatId: room.getHumanSeatId(),
+        betKind: "player",
+        amount: 100,
+      }),
+    ).toThrow(RoomFaultedError);
+
+    expect(room.isFaulted()).toBe(true);
+    expect(manager.isRoomFaulted(TABLE_ID)).toBe(true);
+    const snapshotAfterFailure = room.getSnapshot();
+    const eventCountAfterFailure = store.count();
+    const appendAttemptsAfterFailure = store.appendAttempts;
+
+    expect(() =>
+      room.submitIntent({
+        type: "clear_bets",
+        actorId: HUMAN,
+        seatId: room.getHumanSeatId(),
+      }),
+    ).toThrow(RoomFaultedError);
+    expect(() => room.playAutomaticRound()).toThrow(RoomFaultedError);
+
+    expect(room.getSnapshot()).toEqual(snapshotAfterFailure);
+    expect(store.count()).toBe(eventCountAfterFailure);
+    expect(store.appendAttempts).toBe(appendAttemptsAfterFailure);
   });
 });

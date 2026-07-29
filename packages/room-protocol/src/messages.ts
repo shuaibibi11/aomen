@@ -95,11 +95,22 @@ export type ServerMessage =
 
 export type ServerMessageType = ServerMessage["type"];
 
-/** Error codes the server can report to a client. */
-export type RoomErrorCode =
-  | "unknown_room"
-  | "not_joined"
-  | "actor_not_allowed"
-  | "actor_mismatch"
-  | "malformed_message"
-  | "internal_error";
+/** Runtime-checkable error codes the server can report to a client. */
+export const ROOM_ERROR_CODES = [
+  "unknown_room",
+  "not_joined",
+  "actor_not_allowed",
+  "actor_mismatch",
+  "intent_not_allowed",
+  "malformed_message",
+  "internal_error",
+] as const;
+
+export type RoomErrorCode = (typeof ROOM_ERROR_CODES)[number];
+
+const roomErrorCodeSet: ReadonlySet<unknown> = new Set(ROOM_ERROR_CODES);
+
+/** Narrow an untrusted wire value to a supported room error code. */
+export function isRoomErrorCode(value: unknown): value is RoomErrorCode {
+  return roomErrorCodeSet.has(value);
+}

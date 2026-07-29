@@ -18,6 +18,7 @@ import {
   type SeatId,
   type TableEvent,
   type TableId,
+  type TableIntent,
   type TableSnapshot,
 } from "@mct/shared";
 import type { RulePack } from "@mct/rule-packs";
@@ -64,6 +65,20 @@ export interface RoomManagerOptions {
 }
 
 /**
+ * Raised once a room can no longer guarantee agreement between runtime state
+ * and its event log.
+ */
+export class RoomFaultedError extends Error {
+  constructor(
+    readonly tableId: TableId,
+    readonly rootCause: unknown,
+  ) {
+    super(`Room ${tableId} is faulted and cannot process operations`);
+    this.name = "RoomFaultedError";
+  }
+}
+
+/**
  * One live room: a runtime, its dealer, its seated actors and their AI.
  *
  * The dealer is the system dealer, so the room can drive deal/settle itself in
@@ -76,6 +91,7 @@ export class Room {
   private readonly allowedClientActorIds: ReadonlySet<ActorId>;
   private readonly aiSeats: readonly SeatedAi[];
   private readonly store: EventStore;
+  private fault: RoomFaultedError | null = null;
 
   constructor(
     options: CreateRoomOptions,
@@ -152,8 +168,18 @@ export class Room {
   private applyIntentAndStore(
     intent: Parameters<TableRuntime["submitIntent"]>[0],
   ): TableEvent {
+    this.assertOperational();
     const event = this.runtime.submitIntent(intent);
-    this.store.append(event);
+    try {
+      this.store.append(event);
+    } catch (error) {
+      // The in-memory runtime mutates before append and has no rollback. Fail
+      // stop permanently rather than serving a state that diverged from the
+      // authoritative event log. A persistent engine should use a transaction
+      // or transactional outbox before replacing this model.
+      this.fault = new RoomFaultedError(event.tableId, error);
+      throw this.fault;
+    }
     const snapshot = this.runtime.getSnapshot();
     if (event.seq !== snapshot.lastEventSeq) {
       throw new Error(
@@ -195,9 +221,46 @@ export class Room {
     return this.humanSeatId;
   }
 
+  isFaulted(): boolean {
+    return this.fault !== null;
+  }
+
+  private assertOperational(): void {
+    if (this.fault !== null) {
+      throw this.fault;
+    }
+  }
+
   /** Whether an ordinary client socket may bind to this actor identity. */
   isClientActorAllowed(actorId: ActorId): boolean {
     return actorId === this.humanActorId && this.allowedClientActorIds.has(actorId);
+  }
+
+  /**
+   * Authorize an intent arriving from an ordinary client socket.
+   *
+   * Socket clients can only perform player actions as the room's human actor,
+   * and those actions are confined to the human seat. Dealer lifecycle intents
+   * and every AI seat remain server-controlled.
+   */
+  isClientIntentAllowed(intent: TableIntent): boolean {
+    if (!this.isClientActorAllowed(intent.actorId)) {
+      return false;
+    }
+
+    switch (intent.type) {
+      case "buy_in":
+      case "place_bet":
+      case "clear_bets":
+      case "cash_out":
+        return intent.seatId === this.humanSeatId;
+      case "start_round":
+      case "no_more_bets":
+      case "deal_next":
+      case "reveal":
+      case "settle_round":
+        return false;
+    }
   }
 
   /**
@@ -281,6 +344,11 @@ export class RoomManager {
   /** Read-only join authorization used by transport gateways. */
   isClientActorAllowed(tableId: TableId, actorId: ActorId): boolean {
     return this.rooms.get(tableId)?.isClientActorAllowed(actorId) ?? false;
+  }
+
+  /** Expose quarantine state for health checks and operational monitoring. */
+  isRoomFaulted(tableId: TableId): boolean {
+    return this.rooms.get(tableId)?.isFaulted() ?? false;
   }
 
   subscribe(
