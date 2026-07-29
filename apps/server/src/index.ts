@@ -15,13 +15,20 @@ async function main(): Promise<void> {
   const gateway = new WsGateway({ port: PORT, roomManager: app.roomManager });
   app.demoScheduler.start();
 
-  const shutdown = (): void => {
+  let shutdownPromise: Promise<void> | null = null;
+  const shutdown = (): Promise<void> => {
+    if (shutdownPromise !== null) {
+      return shutdownPromise;
+    }
     app.demoScheduler.stop();
-    gateway.close();
-    process.exit(0);
+    shutdownPromise = gateway.close().catch((error: unknown) => {
+      console.error("Server shutdown failed:", error);
+      process.exitCode = 1;
+    });
+    return shutdownPromise;
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
 
   console.log(
     `Room server listening on ws://localhost:${PORT} ` +
@@ -35,5 +42,5 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.error("Server failed to start:", error);
-  process.exit(1);
+  process.exitCode = 1;
 });

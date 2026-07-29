@@ -51,8 +51,10 @@ export function getIntentActorError(
 
 export class WsGateway {
   private readonly server: WebSocketServer;
+  private readonly listeningPromise: Promise<void>;
   private readonly roomManager: RoomManager;
   private readonly onError: (error: unknown) => void;
+  private closePromise: Promise<void> | null = null;
   /** Authoritative identity and table established by each successful join. */
   private readonly socketContexts = new Map<WebSocket, SocketContext>();
   private readonly roomSubscriptions = new Map<
@@ -72,8 +74,71 @@ export class WsGateway {
       });
     this.server =
       options.webSocketServer ?? new WebSocketServer({ port: options.port! });
+    this.listeningPromise = this.createListeningPromise();
+    void this.listeningPromise.catch(() => undefined);
     this.server.on("error", (error) => this.reportError(error));
     this.server.on("connection", (socket) => this.handleConnection(socket));
+  }
+
+  private createListeningPromise(): Promise<void> {
+    if (this.readServerAddress() !== null) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve, reject) => {
+      const handleListening = (): void => {
+        removeStartupListeners();
+        resolve();
+      };
+      const handleError = (error: Error): void => {
+        removeStartupListeners();
+        reject(error);
+      };
+      const handleClose = (): void => {
+        removeStartupListeners();
+        reject(new Error("WebSocket server closed before listening"));
+      };
+      const removeStartupListeners = (): void => {
+        this.server.off("listening", handleListening);
+        this.server.off("error", handleError);
+        this.server.off("close", handleClose);
+      };
+
+      this.server.once("listening", handleListening);
+      this.server.once("error", handleError);
+      this.server.once("close", handleClose);
+    });
+  }
+
+  /** Resolve once the underlying server has bound its TCP listener. */
+  waitUntilListening(): Promise<void> {
+    return this.listeningPromise;
+  }
+
+  /** Return the bound TCP port after listening has started. */
+  getPort(): number {
+    const address = this.readServerAddress();
+    if (address === null) {
+      throw new Error("WebSocket server is not listening");
+    }
+    if (typeof address === "string") {
+      throw new Error("WebSocket server is listening on a non-TCP address");
+    }
+    return address.port;
+  }
+
+  private readServerAddress(): ReturnType<WebSocketServer["address"]> {
+    try {
+      return this.server.address();
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === 'The server is operating in "noServer" mode'
+      ) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   private handleConnection(socket: WebSocket): void {
@@ -302,16 +367,43 @@ export class WsGateway {
     }
   }
 
-  /** Stop listening and close all sockets. */
-  close(): void {
+  /** Stop listening and resolve after every server-side socket has closed. */
+  close(): Promise<void> {
+    if (this.closePromise !== null) {
+      return this.closePromise;
+    }
+    this.closePromise = this.closeServer();
+    return this.closePromise;
+  }
+
+  private async closeServer(): Promise<void> {
     for (const unsubscribe of this.roomSubscriptions.values()) {
       unsubscribe();
     }
     this.roomSubscriptions.clear();
     this.socketContexts.clear();
-    for (const socket of this.server.clients) {
-      socket.close();
-    }
-    this.server.close();
+
+    const clientClosePromises = [...this.server.clients].map(
+      (socket) =>
+        new Promise<void>((resolve) => {
+          if (socket.readyState === WebSocket.CLOSED) {
+            resolve();
+            return;
+          }
+          socket.once("close", () => resolve());
+          socket.close();
+        }),
+    );
+    const serverClosePromise = new Promise<void>((resolve, reject) => {
+      this.server.close((error) => {
+        if (error !== undefined && error.message !== "The server is not running") {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+
+    await Promise.all([...clientClosePromises, serverClosePromise]);
   }
 }
