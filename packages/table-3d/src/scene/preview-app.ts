@@ -39,6 +39,9 @@ import {
   type TableVariant,
 } from "../specs/table-layout.js";
 import { buildTableViews, type TableViewId } from "../specs/table-views.js";
+import { BetInteraction, type BetAttempt } from "./bet-interaction.js";
+import type { TableSession } from "../session/table-session.js";
+import { TABLE_FOOTPRINT } from "../models/table-body.js";
 import {
   createMemberCardSet,
   createPlaqueModel,
@@ -110,6 +113,17 @@ export class PreviewApp {
   private turntableEnabled = true;
   private activeTableViewId: TableViewId = "guest";
 
+  /**
+   * The live betting session, present only while a table mode is active.
+   *
+   * It is rebuilt with the table because a session owns a shoe and a runtime:
+   * switching hall type or casino starts a new table, not a new view of the old
+   * one.
+   */
+  private betInteraction: BetInteraction | null = null;
+  private onBetAttempt: ((attempt: BetAttempt) => void) | null = null;
+  private onTableStateChanged: (() => void) | null = null;
+
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -143,7 +157,28 @@ export class PreviewApp {
 
     window.addEventListener("resize", () => this.handleResize());
     this.handleResize();
+
+    // Betting clicks are only meaningful on a table; the handler no-ops
+    // otherwise. Using pointerdown rather than click means a drag that started
+    // on a spot does not place a bet when the orbit gesture ends.
+    canvas.addEventListener("pointerdown", (event) => {
+      this.handleCanvasPointerDown(event);
+    });
+
     this.renderer.setAnimationLoop(() => this.renderFrame());
+  }
+
+  /**
+   * Route a canvas press to the betting session.
+   *
+   * Only the primary button bets: the middle and right buttons drive the orbit
+   * controls, and treating them as bets would place chips while the camera moves.
+   */
+  private handleCanvasPointerDown(event: PointerEvent): void {
+    if (event.button !== 0 || this.betInteraction === null) {
+      return;
+    }
+    this.betInteraction.handlePointerDown(event, this.canvas, this.camera);
   }
 
   /** Three-point studio setup: key, fill and a warm rim to read the gold. */
@@ -449,14 +484,38 @@ export class PreviewApp {
     this.contentGroup.add(monitor);
   }
 
-  /** The complete table: body, printed felt, dealer station and demo bets. */
+  /**
+   * The complete table, wired to a live engine session.
+   *
+   * The demo bets are switched off here: once the engine is driving, the chips
+   * on the cloth have to come from the snapshot, otherwise the table would show
+   * stakes that no runtime is holding.
+   */
   private buildFullTable(theme: CasinoTheme, variant: TableVariant): void {
     const table = createBaccaratTable({
       theme,
       casinoId: this.activeCasinoId,
       variant,
+      showDemoBets: false,
     });
     this.contentGroup.add(table);
+
+    this.betInteraction?.dispose();
+    const interaction = new BetInteraction({
+      theme,
+      casinoId: this.activeCasinoId,
+      variant,
+      surfaceY: TABLE_FOOTPRINT.surfaceY,
+      onBetAttempt: (attempt) => this.onBetAttempt?.(attempt),
+      onStateChanged: () => {
+        this.updateInfoPanel();
+        this.onTableStateChanged?.();
+      },
+    });
+    interaction.attachToTable(table);
+    table.add(interaction.chipGroup);
+    table.add(interaction.cardGroup);
+    this.betInteraction = interaction;
 
     // The prop-preview felt disc would intersect the table legs.
     if (this.feltMesh !== null) {
@@ -528,6 +587,7 @@ export class PreviewApp {
     this.rebuildContent();
     // Tier counts differ per casino, so the member-card row changes width.
     this.frameActiveContent();
+    this.onTableStateChanged?.();
   }
 
   setMode(mode: PreviewMode): void {
@@ -538,6 +598,10 @@ export class PreviewApp {
       this.turntableEnabled && TABLE_MODE_VARIANTS[mode] === undefined;
     this.rebuildContent();
     this.frameActiveContent();
+    // Switching in or out of a table creates or destroys the session, so the
+    // betting panel has to be told: it was built before any table existed and
+    // would otherwise stay hidden for the whole session.
+    this.onTableStateChanged?.();
   }
 
   /**
@@ -546,6 +610,87 @@ export class PreviewApp {
    */
   get sceneGraph(): THREE.Scene {
     return this.scene;
+  }
+
+  /**
+   * The camera currently rendering, exposed so verification tooling can project
+   * a world position to the same screen pixel a user would click.
+   */
+  get activeCamera(): THREE.PerspectiveCamera {
+    return this.camera;
+  }
+
+  /** The canvas being rendered into, for turning projections into real clicks. */
+  get renderCanvas(): HTMLCanvasElement {
+    return this.canvas;
+  }
+
+  /** Which hall type is on screen, or null when no table is being shown. */
+  getTableVariant(): TableVariant | null {
+    return TABLE_MODE_VARIANTS[this.activeMode] ?? null;
+  }
+
+  /**
+   * The live betting session, or null when no table mode is active.
+   *
+   * Exposed so the control panel can read engine state directly. Nothing about
+   * the game is mirrored into this class: the panel asks the session, which asks
+   * the runtime, so there is no second copy of the truth to fall out of step.
+   */
+  getBetSession(): TableSession | null {
+    return this.betInteraction?.getSession() ?? null;
+  }
+
+  getSelectedDenomination(): number | null {
+    return this.betInteraction?.getSelectedDenomination() ?? null;
+  }
+
+  setSelectedDenomination(denomination: number): void {
+    this.betInteraction?.setSelectedDenomination(denomination);
+  }
+
+  /** Close betting, deal the hand to completion and settle it. */
+  playRoundToSettlement(): void {
+    this.betInteraction?.playRoundToSettlement();
+  }
+
+  /** Open the next round, clearing the cloth. */
+  startNextRound(): void {
+    this.betInteraction?.startNextRound();
+  }
+
+  /** Take back every bet the guest has placed this round. */
+  clearGuestSeatBets(): void {
+    const session = this.getBetSession();
+    if (session === null) {
+      return;
+    }
+    this.betInteraction?.clearSeatBets(session.getGuestSeat().label);
+  }
+
+  /** Report the outcome of each click that landed on a betting spot. */
+  setBetAttemptHandler(handler: (attempt: BetAttempt) => void): void {
+    this.onBetAttempt = handler;
+  }
+
+  /** Notify the UI whenever engine state changed and should be re-read. */
+  setTableStateHandler(handler: () => void): void {
+    this.onTableStateChanged = handler;
+  }
+
+  /** The live betting session, or null when no table is on screen. */
+  get activeBetInteraction(): BetInteraction | null {
+    return this.betInteraction;
+  }
+
+  /** Report every bet attempt, accepted or rejected, to the UI. */
+  setBetAttemptListener(listener: (attempt: BetAttempt) => void): void {
+    this.onBetAttempt = listener;
+  }
+
+  /** Called whenever the engine state changed, so the UI can re-read it. */
+  setTableStateListener(listener: () => void): void {
+    this.onTableStateChanged = listener;
   }
 
   setTableView(viewId: TableViewId): void {
