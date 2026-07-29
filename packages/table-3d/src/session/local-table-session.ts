@@ -9,6 +9,7 @@ import {
   type TableSnapshot,
 } from "@mct/shared";
 import type { RulePack } from "@mct/rule-packs/schema";
+import type { RoomSessionCapabilities } from "@mct/room-protocol";
 import { createShoe, TableRuntime } from "@mct/table-engine";
 import {
   buildSeatBetSpots,
@@ -88,6 +89,14 @@ export class LocalTableSession implements TableSession {
       });
     }
     this.runtime.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+  }
+
+  getCapabilities(): RoomSessionCapabilities {
+    return {
+      canBet: true,
+      canClearBets: true,
+      canControlDealer: true,
+    };
   }
 
   getRulePack(): RulePack {

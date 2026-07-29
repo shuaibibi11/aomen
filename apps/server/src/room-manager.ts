@@ -23,6 +23,7 @@ import {
   type TableSnapshot,
 } from "@mct/shared";
 import type { RulePack } from "@mct/rule-packs";
+import type { RoomSessionCapabilities } from "@mct/room-protocol";
 import { TableRuntime, createShoe } from "@mct/table-engine";
 import { BasicPlayerAi } from "./ai/basic-player-ai.js";
 import type { EventStore } from "./memory-event-store.js";
@@ -259,6 +260,16 @@ export class Room {
 
   getHumanSeatId(): SeatId {
     return this.humanSeatId;
+  }
+
+  getClientCapabilities(actorId: ActorId): RoomSessionCapabilities {
+    const isAuthorizedHuman = actorId === this.humanActorId
+      && this.allowedClientActorIds.has(actorId);
+    return {
+      canBet: isAuthorizedHuman,
+      canClearBets: isAuthorizedHuman,
+      canControlDealer: false,
+    };
   }
 
   isFaulted(): boolean {

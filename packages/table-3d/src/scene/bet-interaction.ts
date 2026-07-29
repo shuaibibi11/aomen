@@ -194,7 +194,11 @@ export class BetInteraction {
 
   /** Submit a bet and wait for its authoritative session update. */
   async placeBetAtSpot(hit: BetSpotHit): Promise<BetAttempt | null> {
-    if (this.disposed || this.commandPending) {
+    if (
+      this.disposed
+      || this.commandPending
+      || !this.session.getCapabilities().canBet
+    ) {
       return null;
     }
     const commandGeneration = ++this.commandGeneration;

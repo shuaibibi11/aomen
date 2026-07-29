@@ -203,6 +203,14 @@ export interface JoinedMessage {
   readonly snapshot: TableSnapshot;
   readonly rulePack: RulePack;
   readonly seats: readonly RoomSeatDescriptor[];
+  readonly capabilities: RoomSessionCapabilities;
+}
+
+/** Server-authoritative command permissions for the joined actor. */
+export interface RoomSessionCapabilities {
+  readonly canBet: boolean;
+  readonly canClearBets: boolean;
+  readonly canControlDealer: boolean;
 }
 
 export interface RoomSeatDescriptor {
@@ -325,6 +333,28 @@ function requireFiniteNumber(value: unknown, fieldName: string): number {
     throw new ServerMessageParseError(`${fieldName} must be a finite number`);
   }
   return value;
+}
+
+function requireBoolean(value: unknown, fieldName: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new ServerMessageParseError(`${fieldName} must be a boolean`);
+  }
+  return value;
+}
+
+function parseRoomSessionCapabilities(value: unknown): RoomSessionCapabilities {
+  const capabilities = requireServerObject(value, "message.capabilities");
+  return {
+    canBet: requireBoolean(capabilities.canBet, "message.capabilities.canBet"),
+    canClearBets: requireBoolean(
+      capabilities.canClearBets,
+      "message.capabilities.canClearBets",
+    ),
+    canControlDealer: requireBoolean(
+      capabilities.canControlDealer,
+      "message.capabilities.canControlDealer",
+    ),
+  };
 }
 
 function requireNonNegativeInteger(value: unknown, fieldName: string): number {
@@ -494,6 +524,7 @@ export function parseServerMessage(value: unknown): ServerMessage {
         snapshot: parseTableSnapshot(message.snapshot, "message.snapshot"),
         rulePack: parseRulePack(message.rulePack),
         seats: parseSeatDescriptors(message.seats),
+        capabilities: parseRoomSessionCapabilities(message.capabilities),
       } as JoinedMessage;
     case "snapshot":
       return {

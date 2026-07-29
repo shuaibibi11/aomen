@@ -55,6 +55,11 @@ const validRulePack = {
 const validSeats = [
   { seatId: "seat-1", label: 1, occupantId: "human-1" },
 ];
+const validCapabilities = {
+  canBet: true,
+  canClearBets: true,
+  canControlDealer: false,
+};
 
 describe("client message parsing", () => {
   it("parses every supported client message and table intent", () => {
@@ -143,6 +148,7 @@ describe("server message parsing", () => {
       snapshot: validSnapshot,
       rulePack: validRulePack,
       seats: validSeats,
+      capabilities: validCapabilities,
     },
     { type: "snapshot", snapshot: validSnapshot },
     { type: "event", event: validEvent },
@@ -162,6 +168,7 @@ describe("server message parsing", () => {
     { type: "joined", tableId: "table-1", actorId: "", protocolVersion: 2, snapshot: validSnapshot },
     { type: "joined", tableId: "table-1", actorId: "human-1", protocolVersion: "2", snapshot: validSnapshot },
     { type: "joined", tableId: "table-1", actorId: "human-1", protocolVersion: 3, snapshot: validSnapshot, rulePack: validRulePack, seats: [{ seatId: "seat-1", label: 0, occupantId: "human-1" }] },
+    { type: "joined", tableId: "table-1", actorId: "human-1", protocolVersion: 3, snapshot: validSnapshot, rulePack: validRulePack, seats: validSeats, capabilities: { ...validCapabilities, canBet: "yes" } },
     { type: "intent_result", requestId: "", event: validEvent },
     { type: "intent_result", requestId: "request-1", event: { ...validEvent, seq: -1 } },
     { type: "error", code: "internal_error", message: "bad", requestId: "" },
@@ -196,6 +203,7 @@ describe("server message parsing", () => {
       snapshot: { ...validSnapshot, publicConfig: { minimumBet: 10 } },
       rulePack: { ...validRulePack, futureRule: true },
       seats: validSeats,
+      capabilities: validCapabilities,
       futureField: "future",
     });
 

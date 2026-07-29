@@ -300,6 +300,7 @@ export class WsGateway {
       snapshot: room.getSnapshot(),
       rulePack: room.getRulePack(),
       seats: room.getSeatDescriptors(),
+      capabilities: room.getClientCapabilities(actorId),
     });
   }
 

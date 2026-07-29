@@ -123,6 +123,16 @@ describe("RoomManager", () => {
     ).toBe(false);
   });
 
+  it("publishes player-only session capabilities for the current room", () => {
+    const { room } = createRoom();
+
+    expect(room.getClientCapabilities(HUMAN)).toEqual({
+      canBet: true,
+      canClearBets: true,
+      canControlDealer: false,
+    });
+  });
+
   it("funds every seat at creation", () => {
     const { room } = createRoom();
     const snapshot = room.getSnapshot();

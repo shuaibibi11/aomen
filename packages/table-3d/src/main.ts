@@ -20,10 +20,7 @@ import {
   seatLocalToWorld,
 } from "./specs/table-layout.js";
 import { createConfiguredTableSessionFactory } from "./session/session-factory.js";
-import {
-  readSessionRuntimeConfig,
-  type RemoteSessionRuntimeConfig,
-} from "./session/session-runtime-config.js";
+import { readSessionRuntimeConfig } from "./session/session-runtime-config.js";
 
 function requireElement<T extends HTMLElement>(elementId: string): T {
   const element = document.getElementById(elementId);
@@ -66,9 +63,7 @@ function buildOptionGroup<TValue extends string>(
 
 function main(): void {
   const canvas = requireElement<HTMLCanvasElement>("viewport");
-  const globalRuntimeConfig = (globalThis as typeof globalThis & {
-    __MCT_SESSION_CONFIG__?: Partial<RemoteSessionRuntimeConfig>;
-  }).__MCT_SESSION_CONFIG__;
+  const globalRuntimeConfig = globalThis.__MCT_ROOM_CONFIG__;
   const runtimeConfig = readSessionRuntimeConfig(
     new URLSearchParams(globalThis.location.search),
     globalRuntimeConfig,
@@ -140,7 +135,10 @@ function wireBettingPanel(previewApp: PreviewApp): void {
   const actionContainer = requireElement("round-actions");
   const feedback = requireElement("bet-feedback");
   const stateReadout = requireElement("table-state-readout");
-  const actionButtons: HTMLButtonElement[] = [];
+  const actionButtons: Array<{
+    readonly button: HTMLButtonElement;
+    readonly capability: "canClearBets" | "canControlDealer";
+  }> = [];
 
   const refreshPanel = (): void => {
     const session = previewApp.getBetSession();
@@ -150,8 +148,11 @@ function wireBettingPanel(previewApp: PreviewApp): void {
     }
 
     const commandPending = previewApp.isTableCommandPending();
-    for (const actionButton of actionButtons) {
-      actionButton.disabled = commandPending;
+    const capabilities = session.getCapabilities();
+    for (const action of actionButtons) {
+      const isSupported = capabilities[action.capability];
+      action.button.hidden = !isSupported;
+      action.button.disabled = commandPending || !isSupported;
     }
 
     const snapshot = session.getSnapshot();
@@ -188,10 +189,26 @@ function wireBettingPanel(previewApp: PreviewApp): void {
     (value) => previewApp.setSelectedDenomination(Number(value)),
   );
 
-  const actions: ReadonlyArray<{ label: string; run: () => Promise<void> }> = [
-    { label: "停止下注並發牌", run: () => previewApp.playRoundToSettlement() },
-    { label: "開下一局", run: () => previewApp.startNextRound() },
-    { label: "清除本座注", run: () => previewApp.clearGuestSeatBets() },
+  const actions: ReadonlyArray<{
+    label: string;
+    capability: "canClearBets" | "canControlDealer";
+    run: () => Promise<void>;
+  }> = [
+    {
+      label: "停止下注並發牌",
+      capability: "canControlDealer",
+      run: () => previewApp.playRoundToSettlement(),
+    },
+    {
+      label: "開下一局",
+      capability: "canControlDealer",
+      run: () => previewApp.startNextRound(),
+    },
+    {
+      label: "清除本座注",
+      capability: "canClearBets",
+      run: () => previewApp.clearGuestSeatBets(),
+    },
   ];
   for (const action of actions) {
     const button = document.createElement("button");
@@ -206,7 +223,7 @@ function wireBettingPanel(previewApp: PreviewApp): void {
           : "動作失敗";
       }
     });
-    actionButtons.push(button);
+    actionButtons.push({ button, capability: action.capability });
     actionContainer.append(button);
   }
 

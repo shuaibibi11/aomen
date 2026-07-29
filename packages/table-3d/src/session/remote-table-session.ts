@@ -1,4 +1,8 @@
-import type { JoinedMessage, ServerMessage } from "@mct/room-protocol";
+import type {
+  JoinedMessage,
+  RoomSessionCapabilities,
+  ServerMessage,
+} from "@mct/room-protocol";
 import type {
   RoomConnectionStateSnapshot,
   RoomMessageListener,
@@ -31,6 +35,13 @@ export interface RemoteRoomConnection {
   close(): void;
 }
 
+export class UnsupportedSessionCommandError extends Error {
+  constructor(command: string) {
+    super(`Remote session does not support command: ${command}`);
+    this.name = "UnsupportedSessionCommandError";
+  }
+}
+
 export interface RemoteTableSessionCreateOptions {
   readonly connection: RemoteRoomConnection;
   readonly commandTimeoutMs?: number;
@@ -55,6 +66,7 @@ export class RemoteTableSession implements TableSession {
   private readonly commandTimeoutMs: number;
   private readonly ownsConnection: boolean;
   private readonly createRequestId: () => string;
+  private capabilities: RoomSessionCapabilities;
   private readonly listeners = new Set<TableSessionListener>();
   private readonly pendingCommands = new Map<string, PendingCommand>();
   private readonly eventsBySequence = new Map<number, TableEvent>();
@@ -66,8 +78,20 @@ export class RemoteTableSession implements TableSession {
   private disposed = false;
 
   static async create(options: RemoteTableSessionCreateOptions): Promise<RemoteTableSession> {
-    const joined = await options.connection.connect();
-    return new RemoteTableSession(options, joined);
+    const ownsConnection = options.ownsConnection ?? true;
+    try {
+      const joined = await options.connection.connect();
+      return new RemoteTableSession(options, joined);
+    } catch (error) {
+      if (ownsConnection) {
+        try {
+          await options.connection.close();
+        } catch {
+          // Cleanup must not replace the original connection or bootstrap error.
+        }
+      }
+      throw error;
+    }
   }
 
   private constructor(options: RemoteTableSessionCreateOptions, joined: JoinedMessage) {
@@ -78,6 +102,7 @@ export class RemoteTableSession implements TableSession {
     this.commandTimeoutMs = options.commandTimeoutMs ?? 10_000;
     this.ownsConnection = options.ownsConnection ?? true;
     this.createRequestId = options.createRequestId ?? createUniqueRequestId;
+    this.capabilities = Object.freeze({ ...joined.capabilities });
     this.seats = joined.seats
       .filter((seat): seat is typeof seat & { occupantId: NonNullable<typeof seat.occupantId> } =>
         seat.occupantId !== null)
@@ -103,6 +128,7 @@ export class RemoteTableSession implements TableSession {
     });
   }
 
+  getCapabilities(): RoomSessionCapabilities { return this.capabilities; }
   getRulePack(): RulePack { return this.rulePack; }
   getBetSpots(): readonly BetSpotSpec[] { return this.betSpots; }
   getSeats(): readonly SessionSeat[] { return this.seats; }
@@ -125,6 +151,9 @@ export class RemoteTableSession implements TableSession {
   }
 
   placeBet(seatLabel: number, betKind: BetKind, amount: number): Promise<TableEvent> {
+    if (!this.capabilities.canBet) {
+      return this.rejectUnsupportedCommand("placeBet");
+    }
     const seat = this.requireGuestSeat(seatLabel);
     return this.submitCommand({
       type: "place_bet",
@@ -136,6 +165,9 @@ export class RemoteTableSession implements TableSession {
   }
 
   clearBets(seatLabel: number): Promise<TableEvent> {
+    if (!this.capabilities.canClearBets) {
+      return this.rejectUnsupportedCommand("clearBets");
+    }
     const seat = this.requireGuestSeat(seatLabel);
     return this.submitCommand({
       type: "clear_bets",
@@ -145,15 +177,27 @@ export class RemoteTableSession implements TableSession {
   }
 
   closeBetting(): Promise<TableEvent> {
+    if (!this.capabilities.canControlDealer) {
+      return this.rejectUnsupportedCommand("closeBetting");
+    }
     return this.submitCommand({ type: "no_more_bets", actorId: this.actorId });
   }
   dealNext(): Promise<TableEvent> {
+    if (!this.capabilities.canControlDealer) {
+      return this.rejectUnsupportedCommand("dealNext");
+    }
     return this.submitCommand({ type: "deal_next", actorId: this.actorId });
   }
   settleRound(): Promise<TableEvent> {
+    if (!this.capabilities.canControlDealer) {
+      return this.rejectUnsupportedCommand("settleRound");
+    }
     return this.submitCommand({ type: "settle_round", actorId: this.actorId });
   }
   startRound(): Promise<TableEvent> {
+    if (!this.capabilities.canControlDealer) {
+      return this.rejectUnsupportedCommand("startRound");
+    }
     return this.submitCommand({ type: "start_round", actorId: this.actorId });
   }
 
@@ -171,7 +215,7 @@ export class RemoteTableSession implements TableSession {
     this.unsubscribeState();
     this.rejectAllPending(new Error("Remote table session disposed"));
     this.listeners.clear();
-    if (this.ownsConnection) this.connection.close();
+    if (this.ownsConnection) void this.connection.close();
   }
 
   private requireGuestSeat(seatLabel: number): SessionSeat {
@@ -179,6 +223,10 @@ export class RemoteTableSession implements TableSession {
       throw new Error(`Remote commands are limited to guest seat ${this.guestSeat.label}`);
     }
     return this.guestSeat;
+  }
+
+  private rejectUnsupportedCommand(command: string): Promise<TableEvent> {
+    return Promise.reject(new UnsupportedSessionCommandError(command));
   }
 
   private submitCommand(intent: TableIntent): Promise<TableEvent> {
@@ -267,6 +315,7 @@ export class RemoteTableSession implements TableSession {
   private applyRejoinedBootstrap(message: JoinedMessage): void {
     if (message.actorId !== this.actorId) return;
     if (message.snapshot.lastEventSeq < this.snapshot.lastEventSeq) return;
+    this.capabilities = Object.freeze({ ...message.capabilities });
     this.snapshot = message.snapshot;
     for (const listener of this.listeners) listener({ snapshot: message.snapshot });
   }

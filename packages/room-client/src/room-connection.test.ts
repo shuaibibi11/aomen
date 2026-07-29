@@ -48,6 +48,11 @@ const joinedMessage = {
   snapshot,
   rulePack,
   seats: [{ seatId: "seat-1", label: 1, occupantId: "human-1" }],
+  capabilities: {
+    canBet: true,
+    canClearBets: true,
+    canControlDealer: false,
+  },
 };
 
 type SocketEventType = "open" | "message" | "close" | "error";
@@ -95,7 +100,12 @@ class FakeSocket implements WebSocketLike {
   message(value: unknown): void {
     const enrichedValue = typeof value === "object" && value !== null
       && "type" in value && value.type === "joined"
-      ? { rulePack, seats: joinedMessage.seats, ...value }
+      ? {
+          rulePack,
+          seats: joinedMessage.seats,
+          capabilities: joinedMessage.capabilities,
+          ...value,
+        }
       : value;
     this.emit("message", { data: JSON.stringify(enrichedValue) } satisfies WebSocketMessageEvent);
   }

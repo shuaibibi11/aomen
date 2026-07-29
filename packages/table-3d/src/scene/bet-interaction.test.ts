@@ -51,6 +51,20 @@ function createPlayerHit(session: LocalTableSession) {
 }
 
 describe("BetInteraction", () => {
+  it("does not submit a bet when the session capability disables betting", async () => {
+    const session = new LocalTableSession({ variant: "mass" });
+    vi.spyOn(session, "getCapabilities").mockReturnValue({
+      canBet: false,
+      canClearBets: true,
+      canControlDealer: true,
+    });
+    const placeBet = vi.spyOn(session, "placeBet");
+    const interaction = createInteraction(session);
+
+    await expect(interaction.placeBetAtSpot(createPlayerHit(session))).resolves.toBeNull();
+    expect(placeBet).not.toHaveBeenCalled();
+  });
+
   it("uses the injected session and blocks duplicate pending commands", async () => {
     const session = new LocalTableSession({ variant: "mass" });
     const unsubscribe = vi.fn();

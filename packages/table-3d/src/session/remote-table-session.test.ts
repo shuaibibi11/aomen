@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { asActorId, asRoundId, asSeatId, asTableId, type TableEvent, type TableSnapshot } from "@mct/shared";
 import { ROOM_PROTOCOL_VERSION, type JoinedMessage, type ServerMessage } from "@mct/room-protocol";
 import type { RoomConnectionStateSnapshot } from "@mct/room-client";
-import { RemoteTableSession, type RemoteRoomConnection } from "./remote-table-session.js";
+import {
+  RemoteTableSession,
+  UnsupportedSessionCommandError,
+  type RemoteRoomConnection,
+} from "./remote-table-session.js";
 
 const actorId = asActorId("remote-human");
 const seatId = asSeatId("opaque-seat-identity");
@@ -38,11 +42,17 @@ const joined: JoinedMessage = {
     chipset: { currency: "HKD", denominations: [100] },
   },
   seats: [{ seatId, label: 7, occupantId: actorId }],
+  capabilities: {
+    canBet: true,
+    canClearBets: true,
+    canControlDealer: false,
+  },
 };
 
 class FakeConnection implements RemoteRoomConnection {
   readonly sent: Array<{ requestId: string; intent: unknown }> = [];
   closed = false;
+  closeCalls = 0;
   private readonly messageListeners = new Set<(message: ServerMessage) => void>();
   private readonly stateListeners = new Set<(state: RoomConnectionStateSnapshot) => void>();
 
@@ -66,6 +76,7 @@ class FakeConnection implements RemoteRoomConnection {
   }
 
   close(): void {
+    this.closeCalls += 1;
     this.closed = true;
   }
 
@@ -94,6 +105,38 @@ function createAcceptedEvent(sequence: number): TableEvent {
 }
 
 describe("RemoteTableSession", () => {
+  it("exposes authoritative player capabilities and rejects dealer commands locally", async () => {
+    const connection = new FakeConnection();
+    const session = await RemoteTableSession.create({ connection });
+
+    expect(session.getCapabilities()).toEqual(joined.capabilities);
+    await expect(session.closeBetting()).rejects.toBeInstanceOf(UnsupportedSessionCommandError);
+    await expect(session.dealNext()).rejects.toBeInstanceOf(UnsupportedSessionCommandError);
+    await expect(session.settleRound()).rejects.toBeInstanceOf(UnsupportedSessionCommandError);
+    await expect(session.startRound()).rejects.toBeInstanceOf(UnsupportedSessionCommandError);
+    expect(connection.sent).toHaveLength(0);
+  });
+
+  it("closes an owned connection exactly once when connect rejects", async () => {
+    const connection = new FakeConnection();
+    const originalError = new Error("connect timeout");
+    connection.connect = () => Promise.reject(originalError);
+
+    await expect(RemoteTableSession.create({ connection })).rejects.toBe(originalError);
+    expect(connection.closeCalls).toBe(1);
+  });
+
+  it("closes an owned connection exactly once when bootstrap validation fails", async () => {
+    const connection = new FakeConnection();
+    connection.connect = () => Promise.resolve({
+      ...joined,
+      seats: [{ seatId, label: 7, occupantId: null }],
+    });
+
+    await expect(RemoteTableSession.create({ connection })).rejects.toThrow(/authoritative seat/i);
+    expect(connection.closeCalls).toBe(1);
+  });
+
   it("uses bootstrap descriptors and correlates an authoritative result", async () => {
     const connection = new FakeConnection();
     const session = await RemoteTableSession.create({ connection, commandTimeoutMs: 1_000 });

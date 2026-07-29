@@ -6,6 +6,7 @@ import type {
   TableSnapshot,
 } from "@mct/shared";
 import type { RulePack } from "@mct/rule-packs/schema";
+import type { RoomSessionCapabilities } from "@mct/room-protocol";
 import type { BetSpotSpec, TableVariant } from "../specs/table-layout.js";
 
 export interface TableSessionOptions {
@@ -35,6 +36,7 @@ export type TableSessionListener = (update: TableSessionUpdate) => void;
 export type TableSessionUnsubscribe = () => void;
 
 export interface TableSession {
+  getCapabilities(): RoomSessionCapabilities;
   getRulePack(): RulePack;
   getBetSpots(): readonly BetSpotSpec[];
   getSeats(): readonly SessionSeat[];

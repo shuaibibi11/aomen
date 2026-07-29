@@ -12,6 +12,13 @@ export interface RemoteSessionRuntimeConfig {
 
 export type SessionRuntimeConfig = LocalSessionRuntimeConfig | RemoteSessionRuntimeConfig;
 
+export class InsecureSessionCredentialError extends Error {
+  constructor() {
+    super("Remote sessions require a secure in-memory credential; URL credentials are ignored");
+    this.name = "InsecureSessionCredentialError";
+  }
+}
+
 export function readSessionRuntimeConfig(
   query: URLSearchParams,
   globalConfig?: Partial<RemoteSessionRuntimeConfig>,
@@ -24,12 +31,27 @@ export function readSessionRuntimeConfig(
     wsUrl: query.get("wsUrl") ?? globalConfig?.wsUrl,
     tableId: query.get("tableId") ?? globalConfig?.tableId,
     actorId: query.get("actorId") ?? globalConfig?.actorId,
-    credential: query.get("credential") ?? globalConfig?.credential,
+    credential: globalConfig?.credential,
   };
   for (const fieldName of ["wsUrl", "tableId", "actorId", "credential"] as const) {
     if (remoteConfig[fieldName]?.trim() === "" || remoteConfig[fieldName] === undefined) {
+      if (fieldName === "credential") {
+        throw new InsecureSessionCredentialError();
+      }
       throw new Error(`Remote session requires ${fieldName}`);
     }
   }
-  return remoteConfig as RemoteSessionRuntimeConfig;
+  const serializableConfig = {
+    runtime: remoteConfig.runtime,
+    wsUrl: remoteConfig.wsUrl,
+    tableId: remoteConfig.tableId,
+    actorId: remoteConfig.actorId,
+  } as RemoteSessionRuntimeConfig;
+  Object.defineProperty(serializableConfig, "credential", {
+    value: remoteConfig.credential,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return Object.freeze(serializableConfig);
 }
