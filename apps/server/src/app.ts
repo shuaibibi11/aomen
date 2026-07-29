@@ -28,12 +28,26 @@ export interface App {
   readonly demoRoom: Room;
 }
 
+function resolveDemoRoomCredential(options: AppOptions): string {
+  const configuredCredential =
+    options.demoRoomCredential ?? process.env.DEMO_ROOM_CREDENTIAL;
+
+  if (configuredCredential === undefined || configuredCredential.trim() === "") {
+    throw new Error(
+      "Demo room join credential must be configured through AppOptions or DEMO_ROOM_CREDENTIAL",
+    );
+  }
+
+  return configuredCredential;
+}
+
 /**
  * Build the app with one demo room seated with a human plus two basic AI. The
  * demo room's dealer is the system dealer, so rounds can be driven by a tick or
  * by explicit calls without a human dealer present.
  */
 export async function createApp(options: AppOptions = {}): Promise<App> {
+  const demoRoomCredential = resolveDemoRoomCredential(options);
   const store = new MemoryEventStore();
   const roomManager = new RoomManager(store);
 
@@ -42,12 +56,6 @@ export async function createApp(options: AppOptions = {}): Promise<App> {
   );
 
   const demoTableId = asTableId(options.tableId ?? "demo-table");
-  // Development convenience only. Production deployments must override this
-  // through AppOptions or DEMO_ROOM_CREDENTIAL.
-  const demoRoomCredential =
-    options.demoRoomCredential ??
-    process.env.DEMO_ROOM_CREDENTIAL ??
-    "dev-demo-room-credential";
   const demoRoom = roomManager.createRoom({
     tableId: demoTableId,
     rulePack,
