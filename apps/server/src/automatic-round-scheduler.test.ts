@@ -158,7 +158,7 @@ describe("AutomaticRoundScheduler", () => {
     const firstAiSeat = (
       room as unknown as {
         aiSeats: Array<{
-          ai: {
+          decisionSource: {
             decideBet: () => unknown;
           };
         }>;
@@ -167,8 +167,8 @@ describe("AutomaticRoundScheduler", () => {
     if (firstAiSeat === undefined) {
       throw new Error("Expected a seated AI for the deadline test");
     }
-    const originalDecision = firstAiSeat.ai.decideBet();
-    firstAiSeat.ai.decideBet = vi.fn(
+    const originalDecision = { betKind: "player" as const, amount: 100 };
+    firstAiSeat.decisionSource.decideBet = vi.fn(
       () =>
         new Promise((resolve) => {
           resolveAiBet = resolve;
@@ -320,14 +320,14 @@ describe("AutomaticRoundScheduler", () => {
     const firstAiSeat = (
       room as unknown as {
         aiSeats: Array<{
-          ai: { decideBet: () => unknown };
+          decisionSource: { decideBet: () => unknown };
         }>;
       }
     ).aiSeats[0];
     if (firstAiSeat === undefined) {
       throw new Error("Expected a seated AI for the restart test");
     }
-    const originalDecision = firstAiSeat.ai.decideBet();
+    const originalDecision = { betKind: "player" as const, amount: 100 };
     let resolveDecision!: (decision: unknown) => void;
     const decideBet = vi.fn(
       () =>
@@ -335,7 +335,7 @@ describe("AutomaticRoundScheduler", () => {
           resolveDecision = resolve;
         }),
     );
-    firstAiSeat.ai.decideBet = decideBet;
+    firstAiSeat.decisionSource.decideBet = decideBet;
     const scheduler = new AutomaticRoundScheduler(room, TIMING);
 
     scheduler.start();
@@ -349,7 +349,7 @@ describe("AutomaticRoundScheduler", () => {
     await advance(0);
     const firstAiActorId = room
       .getSnapshot()
-      .seats.find((seat) => seat.seatId === (originalDecision as { seatId: string }).seatId)
+      .seats.find((seat) => seat.occupantId?.includes("-ai-1"))
       ?.occupantId;
     const firstAiBets = store
       .listByTable(tableId)
@@ -366,7 +366,7 @@ describe("AutomaticRoundScheduler", () => {
     const firstAiSeat = (
       room as unknown as {
         aiSeats: Array<{
-          ai: { decideBet: () => unknown };
+          decisionSource: { decideBet: () => unknown };
         }>;
       }
     ).aiSeats[0];
@@ -374,7 +374,7 @@ describe("AutomaticRoundScheduler", () => {
       throw new Error("Expected a seated AI for the null-decision test");
     }
     const decideBet = vi.fn(() => null);
-    firstAiSeat.ai.decideBet = decideBet;
+    firstAiSeat.decisionSource.decideBet = decideBet;
     const scheduler = new AutomaticRoundScheduler(room, TIMING);
 
     scheduler.start();
@@ -391,16 +391,16 @@ describe("AutomaticRoundScheduler", () => {
     const firstAiSeat = (
       room as unknown as {
         aiSeats: Array<{
-          ai: { decideBet: () => unknown };
+          decisionSource: { decideBet: () => unknown };
         }>;
       }
     ).aiSeats[0];
     if (firstAiSeat === undefined) {
       throw new Error("Expected a seated AI for the next-round test");
     }
-    const originalDecision = firstAiSeat.ai.decideBet();
+    const originalDecision = { betKind: "player" as const, amount: 100 };
     const decideBet = vi.fn(() => originalDecision);
-    firstAiSeat.ai.decideBet = decideBet;
+    firstAiSeat.decisionSource.decideBet = decideBet;
     const scheduler = new AutomaticRoundScheduler(room, TIMING);
 
     scheduler.start();
@@ -448,7 +448,7 @@ describe("AutomaticRoundScheduler", () => {
     const firstAiSeat = (
       room as unknown as {
         aiSeats: Array<{
-          ai: { decideBet: () => unknown };
+          decisionSource: { decideBet: () => unknown };
         }>;
       }
     ).aiSeats[0];
@@ -456,9 +456,9 @@ describe("AutomaticRoundScheduler", () => {
       throw new Error("Expected a seated AI for the stale decision test");
     }
 
-    const originalDecision = firstAiSeat.ai.decideBet();
+    const originalDecision = { betKind: "player" as const, amount: 100 };
     let resolveOldDecision!: (decision: unknown) => void;
-    firstAiSeat.ai.decideBet = vi
+    firstAiSeat.decisionSource.decideBet = vi
       .fn()
       .mockImplementationOnce(
         () =>
@@ -486,7 +486,7 @@ describe("AutomaticRoundScheduler", () => {
 
     const firstAiActorId = room
       .getSnapshot()
-      .seats.find((seat) => seat.seatId === (originalDecision as { seatId: string }).seatId)
+      .seats.find((seat) => seat.occupantId?.includes("-ai-1"))
       ?.occupantId;
     const firstAiBetEvents = store
       .listByTable(tableId)

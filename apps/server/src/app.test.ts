@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { asActorId } from "@mct/shared";
 import { createApp } from "./app.js";
 import type { AutomaticRoundTiming } from "./automatic-round-scheduler.js";
@@ -16,6 +16,31 @@ afterEach(() => {
 });
 
 describe("createApp room credential configuration", () => {
+  it("passes an injected AI decision factory to the demo room", async () => {
+    const decideBet = vi.fn(async () => ({
+      betKind: "tie" as const,
+      amount: 100,
+    }));
+    const aiDecisionSourceFactory = vi.fn(() => ({ decideBet }));
+
+    const app = await createApp({
+      demoRoomCredential: "factory-app-credential",
+      aiDecisionSourceFactory,
+    });
+    app.demoRoom.startAutomaticRound();
+    await app.demoRoom.placeAutomaticPlayerBets(new AbortController().signal);
+
+    expect(aiDecisionSourceFactory).toHaveBeenCalledTimes(2);
+    expect(aiDecisionSourceFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        index: 1,
+        seed: "demo-seed-ai-1",
+        rulePack: expect.objectContaining({ id: expect.any(String) }),
+      }),
+    );
+    expect(decideBet).toHaveBeenCalledTimes(2);
+  });
+
   it("creates a stopped demo scheduler with configurable timing", async () => {
     const automaticRoundTiming: AutomaticRoundTiming = {
       bettingWindowMs: 20,

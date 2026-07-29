@@ -13,9 +13,12 @@
 import {
   asActorId,
   asSeatId,
+  BET_KINDS,
   SYSTEM_DEALER,
   type ActorId,
+  type BetKind,
   type RoundId,
+  type RoundOutcome,
   type SeatId,
   type TableEvent,
   type TableId,
@@ -26,6 +29,11 @@ import type { RulePack } from "@mct/rule-packs";
 import type { RoomInstanceId, RoomSessionCapabilities } from "@mct/room-protocol";
 import { TableRuntime, createShoe } from "@mct/table-engine";
 import { BasicPlayerAi } from "./ai/basic-player-ai.js";
+import type { PlayerDecisionContext } from "./ai/player-decision-context.js";
+import type {
+  PlayerBetDecision,
+  PlayerDecisionSource,
+} from "./ai/player-decision-source.js";
 import type { EventStore } from "./memory-event-store.js";
 import type {
   RoomUpdate,
@@ -33,11 +41,20 @@ import type {
   UnsubscribeRoomUpdates,
 } from "./room-events.js";
 
-type AiBetDecision = Awaited<ReturnType<BasicPlayerAi["decideBet"]>>;
-
 interface AiDecisionCacheEntry {
-  readonly decisionPromise: Promise<AiBetDecision>;
+  readonly controller: AbortController;
+  readonly decisionPromise: Promise<PlayerBetDecision | null>;
 }
+
+export interface AiDecisionSourceFactoryOptions {
+  readonly index: number;
+  readonly seed: string;
+  readonly rulePack: RulePack;
+}
+
+export type AiDecisionSourceFactory = (
+  options: AiDecisionSourceFactoryOptions,
+) => PlayerDecisionSource;
 
 export interface CreateRoomOptions {
   readonly tableId: TableId;
@@ -56,12 +73,14 @@ export interface CreateRoomOptions {
   readonly startingStack?: number;
   /** Stable identity for this room incarnation; injectable for deterministic tests. */
   readonly roomInstanceId?: RoomInstanceId;
+  /** Creates identity-free decision sources for AI seats. */
+  readonly aiDecisionSourceFactory?: AiDecisionSourceFactory;
 }
 
 interface SeatedAi {
   readonly actorId: ActorId;
   readonly seatId: SeatId;
-  readonly ai: BasicPlayerAi;
+  readonly decisionSource: PlayerDecisionSource;
 }
 
 export interface RoomListenerErrorContext {
@@ -162,15 +181,16 @@ export class Room {
         continue;
       }
       const actorId = asActorId(`${options.tableId}-ai-${index}`);
+      const seed = `${options.shoeSeed}-ai-${index}`;
+      const decisionSource = options.aiDecisionSourceFactory?.({
+        index,
+        seed,
+        rulePack: options.rulePack,
+      }) ?? new BasicPlayerAi({ rulePack: options.rulePack, seed });
       aiSeats.push({
         actorId,
         seatId,
-        ai: new BasicPlayerAi({
-          actorId,
-          seatId,
-          rulePack: options.rulePack,
-          seed: `${options.shoeSeed}-ai-${index}`,
-        }),
+        decisionSource,
       });
     }
     this.aiSeats = aiSeats;
@@ -216,7 +236,7 @@ export class Room {
       // stop permanently rather than serving a state that diverged from the
       // authoritative event log. A persistent engine should use a transaction
       // or transactional outbox before replacing this model.
-      this.aiDecisionCache.clear();
+      this.abortAndClearAiDecisions();
       this.fault = new RoomFaultedError(event.tableId, error);
       throw this.fault;
     }
@@ -300,8 +320,61 @@ export class Room {
       return;
     }
 
-    this.aiDecisionCache.clear();
+    this.abortAndClearAiDecisions();
     this.cacheRoundId = roundId;
+  }
+
+  private abortAndClearAiDecisions(): void {
+    for (const entry of this.aiDecisionCache.values()) {
+      entry.controller.abort();
+    }
+    this.aiDecisionCache.clear();
+  }
+
+  private getAllowedBetKinds(): readonly BetKind[] {
+    const enabledSideBetKinds = new Set(
+      this.rulePack.sideBets.map((sideBet) => sideBet.kind),
+    );
+    return BET_KINDS.filter(
+      (betKind) =>
+        betKind === "player" ||
+        betKind === "banker" ||
+        betKind === "tie" ||
+        enabledSideBetKinds.has(betKind as "player_pair" | "banker_pair"),
+    );
+  }
+
+  private createPlayerDecisionContext(
+    snapshot: TableSnapshot,
+    seatId: SeatId,
+  ): PlayerDecisionContext {
+    const seat = snapshot.seats.find((candidate) => candidate.seatId === seatId);
+    if (seat === undefined) {
+      throw new Error(`AI seat ${seatId} is missing from the table snapshot`);
+    }
+
+    const currentBetTotals = this.getAllowedBetKinds().flatMap((betKind) => {
+      const amount = snapshot.bets
+        .filter((bet) => bet.betKind === betKind)
+        .reduce((total, bet) => total + bet.amount, 0);
+      return amount > 0 ? [{ betKind, amount }] : [];
+    });
+    const completedOutcomes = this.store
+      .listByTable(snapshot.tableId)
+      .flatMap((event) => event.outcome === undefined ? [] : [event.outcome]);
+
+    return {
+      phase: snapshot.phase,
+      round: snapshot.roundId,
+      stack: seat.stack,
+      allowedBetKinds: this.getAllowedBetKinds(),
+      limits: { ...this.rulePack.limits },
+      publicHistory: {
+        completedRounds: completedOutcomes.length,
+        recentOutcomes: completedOutcomes.slice(-10) as RoundOutcome[],
+        currentBetTotals,
+      },
+    };
   }
 
   /** Whether an ordinary client socket may bind to this actor identity. */
@@ -365,8 +438,15 @@ export class Room {
       const decisionKey = seated.seatId;
       let decisionEntry = this.aiDecisionCache.get(decisionKey);
       if (decisionEntry === undefined) {
-        const decisionPromise = Promise.resolve().then(() => seated.ai.decideBet());
-        decisionEntry = { decisionPromise };
+        const controller = new AbortController();
+        const context = this.createPlayerDecisionContext(
+          snapshotBeforeDecision,
+          seated.seatId,
+        );
+        const decisionPromise = Promise.resolve().then(() =>
+          seated.decisionSource.decideBet(context, controller.signal),
+        );
+        decisionEntry = { controller, decisionPromise };
         this.aiDecisionCache.set(decisionKey, decisionEntry);
       }
 
@@ -384,7 +464,13 @@ export class Room {
         continue;
       }
       if (bet !== null) {
-        this.applyAutomaticIntent(bet);
+        this.applyIntentAndStore({
+          type: "place_bet",
+          actorId: seated.actorId,
+          seatId: seated.seatId,
+          betKind: bet.betKind,
+          amount: bet.amount,
+        });
       }
     }
   }
@@ -416,14 +502,9 @@ export class Room {
    * window in a live setting; here the tick opens and closes betting itself so
   * a round can be driven end to end without a socket.
    */
-  playAutomaticRound(): void {
+  async playAutomaticRound(): Promise<void> {
     this.startAutomaticRound();
-    for (const seated of this.aiSeats) {
-      const bet = seated.ai.decideBet();
-      if (bet !== null) {
-        this.applyAutomaticIntent(bet);
-      }
-    }
+    await this.placeAutomaticPlayerBets(new AbortController().signal);
     this.closeAutomaticBetting();
 
     // Deal until the runtime leaves the dealing phase.

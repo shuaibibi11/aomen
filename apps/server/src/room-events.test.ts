@@ -107,7 +107,7 @@ describe("authoritative room updates", () => {
     expect(updates[0]?.event.seq).toBe(updates[0]?.snapshot.lastEventSeq);
   });
 
-  it("publishes external, AI, and system dealer intents", () => {
+  it("publishes external, AI, and system dealer intents", async () => {
     const { tableId, roomManager, room } = createRoomManagerWithRoom("sources");
     const updates: RoomUpdate[] = [];
     roomManager.subscribe(tableId, (update) => updates.push(update));
@@ -119,7 +119,7 @@ describe("authoritative room updates", () => {
       betKind: "player",
       amount: 100,
     });
-    room.playAutomaticRound();
+    await room.playAutomaticRound();
 
     expect(
       updates.some(

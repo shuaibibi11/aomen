@@ -8,7 +8,11 @@
 import { asActorId, asTableId, type TableId } from "@mct/shared";
 import { loadRulePack } from "@mct/rule-packs";
 import { MemoryEventStore } from "./memory-event-store.js";
-import { RoomManager, type Room } from "./room-manager.js";
+import {
+  RoomManager,
+  type AiDecisionSourceFactory,
+  type Room,
+} from "./room-manager.js";
 import {
   AutomaticRoundScheduler,
   type AutomaticRoundTiming,
@@ -32,6 +36,8 @@ export interface AppOptions {
   readonly demoRoomCredential?: string;
   /** Phase durations for the automatic demo table. */
   readonly automaticRoundTiming?: AutomaticRoundTiming;
+  /** Optional provider-neutral AI source factory for the demo seats. */
+  readonly aiDecisionSourceFactory?: AiDecisionSourceFactory;
 }
 
 export interface App {
@@ -79,6 +85,9 @@ export async function createApp(options: AppOptions = {}): Promise<App> {
     seatCount: 7,
     aiCount: 2,
     shoeSeed: options.shoeSeed ?? "demo-seed",
+    ...(options.aiDecisionSourceFactory === undefined
+      ? {}
+      : { aiDecisionSourceFactory: options.aiDecisionSourceFactory }),
   });
   const automaticRoundTiming =
     options.automaticRoundTiming ?? DEFAULT_AUTOMATIC_ROUND_TIMING;

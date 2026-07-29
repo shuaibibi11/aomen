@@ -205,20 +205,20 @@ describe("RoomManager", () => {
     expect(manager.getRoom(TABLE_ID)).toBe(room);
   });
 
-  it("drives a full automatic round to a settled outcome", () => {
+  it("drives a full automatic round to a settled outcome", async () => {
     const { room } = createRoom();
-    room.playAutomaticRound();
+    await room.playAutomaticRound();
     const snapshot = room.getSnapshot();
     expect(snapshot.phase).toBe("round_end");
     expect(snapshot.outcome).not.toBeNull();
   });
 
-  it("stops an automatic round immediately when start_round is rejected", () => {
+  it("stops an automatic round immediately when start_round is rejected", async () => {
     const { room, store } = createRoom();
     room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
     const eventCountBeforeAutomaticRound = store.count();
 
-    expect(() => room.playAutomaticRound()).toThrow(
+    await expect(room.playAutomaticRound()).rejects.toThrow(
       "Automatic round intent start_round was rejected: wrong_phase",
     );
 
@@ -229,10 +229,10 @@ describe("RoomManager", () => {
     expect(lastEvent?.rejectReason).toBe("wrong_phase");
   });
 
-  it("appends every accepted engine event to the store", () => {
+  it("appends every accepted engine event to the store", async () => {
     const { store, room } = createRoom();
     const before = store.count();
-    room.playAutomaticRound();
+    await room.playAutomaticRound();
     const after = store.count();
     // A round appends start, AI bets, no-more-bets, several deals and settle.
     expect(after).toBeGreaterThan(before);
@@ -244,9 +244,9 @@ describe("RoomManager", () => {
     expect(settle?.outcome).not.toBeUndefined();
   });
 
-  it("accepts every AI bet using the actor occupying its seat", () => {
+  it("accepts every AI bet using the actor occupying its seat", async () => {
     const { store, room } = createRoom();
-    room.playAutomaticRound();
+    await room.playAutomaticRound();
 
     const occupantsBySeat = new Map(
       room.getSnapshot().seats.map((seat) => [seat.seatId, seat.occupantId]),
@@ -276,11 +276,11 @@ describe("RoomManager", () => {
     expect(new Set(aiActorIds).size).toBe(aiActorIds.length);
   });
 
-  it("repeats AI bets and revealed cards for the same seed", () => {
+  it("repeats AI bets and revealed cards for the same seed", async () => {
     const first = createRoom();
-    first.room.playAutomaticRound();
+    await first.room.playAutomaticRound();
     const second = createRoom();
-    second.room.playAutomaticRound();
+    await second.room.playAutomaticRound();
 
     const selectDeterministicRoundEvents = (store: MemoryEventStore) =>
       store
@@ -312,7 +312,7 @@ describe("RoomManager", () => {
     );
   });
 
-  it("faults permanently after append failure and rejects further operations", () => {
+  it("faults permanently after append failure and rejects further operations", async () => {
     const store = new FailingEventStore();
     const manager = new RoomManager(store);
     const room = manager.createRoom({
@@ -352,7 +352,7 @@ describe("RoomManager", () => {
         seatId: room.getHumanSeatId(),
       }),
     ).toThrow(RoomFaultedError);
-    expect(() => room.playAutomaticRound()).toThrow(RoomFaultedError);
+    await expect(room.playAutomaticRound()).rejects.toThrow(RoomFaultedError);
 
     expect(room.getSnapshot()).toEqual(snapshotAfterFailure);
     expect(store.count()).toBe(eventCountAfterFailure);
