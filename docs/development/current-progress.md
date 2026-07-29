@@ -5,7 +5,7 @@
 ## Git 基线
 
 - 稳定基线：`master` at `5299b17`（`feat(room-protocol): websocket message contracts`）。
-- 本次验收分支：`docs/socket-ai-workflow`，文档修改前 HEAD 为 `dd90364`。
+- 本次验收分支：`docs/socket-ai-workflow`；本地验收的 validated commit 为 `ca8bc64`。
 - Phase 0-1 实现从 `755dc9a`（monorepo）到 `5299b17`（room protocol）建立共享类型、规则包、引擎、账本和协议。
 - Socket + AI 后续切片位于 `a030268..dd90364`，均为 `5299b17` 之后的线性提交。
 
@@ -13,19 +13,19 @@
 
 | Task | 状态 | 关键提交/证据 |
 | --- | --- | --- |
-| 1 Monorepo 骨架 | 完成 | `755dc9a`, `5394d12`；Node/pnpm、install/build 已复验 |
-| 2 共享类型 | 完成 | `f7ff6bf`；shared 10 tests passed |
-| 3 Rule Pack | 完成 | `8a3c6f8`；rule-packs 7 tests passed |
-| 4 补牌表 | 完成 | `d42a98a`；draw-table 13 tests passed |
-| 5 种子 Shoe | 完成 | `549b6e8`；shoe/RNG 10 tests passed |
-| 6 赔付 | 完成 | `e18cf46`；payout 15 tests passed |
-| 7 Chip Ledger | 完成 | `fb5c6fb`；ledger 15 tests passed |
-| 8 TableRuntime | 完成 | `a4a5b83`；runtime 14 tests passed |
-| 9 Room 协议 | 完成 | `5299b17`；protocol 60 tests passed |
-| 10 最小 Server | 完成 | `98d5b74..fa579d8` 与 `47fce39..5922b38`；server 142 tests passed |
-| 11 仓库验收 | 完成 | 根 README、全仓 gates、server smoke 与 table-3d E2E 于本次文档验收完成 |
+| 1 Monorepo 骨架 | 完成 | `755dc9a`, `5394d12`；配置与包结构可由代码/提交核验 |
+| 2 共享类型 | 完成 | `f7ff6bf`；类型与测试文件存在 |
+| 3 Rule Pack | 完成 | `8a3c6f8`；schema、validator、示例包与测试存在 |
+| 4 补牌表 | 完成 | `d42a98a`；实现与 13 个当前测试存在 |
+| 5 种子 Shoe | 完成 | `549b6e8`；实现与 shoe/RNG 当前测试存在 |
+| 6 赔付 | 完成 | `e18cf46`；实现与 15 个当前测试存在 |
+| 7 Chip Ledger | 完成 | `fb5c6fb`；实现与 15 个当前测试存在 |
+| 8 TableRuntime | 完成 | `a4a5b83`；状态机与 14 个当前测试存在 |
+| 9 Room 协议 | 完成 | `5299b17`；协议契约与 60 个当前测试存在 |
+| 10 最小 Server | 完成 | `98d5b74..fa579d8` 与 `47fce39..5922b38`；实现与当前测试存在 |
+| 11 仓库验收 | 实现完成，本地实测 | 根 README 与聚合 scripts 可直接核验；本地 gates、server smoke 与 table-3d E2E 见[验收记录](validation-2026-07-29.md)，不是 CI |
 
-这里的“完成”仅指 Phase 0-1 计划中已实现并复验的范围，不表示 Postgres、L1-L3 教学、教练后台、生产认证或后续路线图已经完成。
+这里的“完成”仅指 Phase 0-1 计划中有代码或提交证据的实现范围，不证明历史运行命令曾在当时执行，也不表示 Postgres、L1-L3 教学、教练后台、生产认证或后续路线图已经完成。
 
 ## Socket + AI 切片
 
@@ -43,11 +43,11 @@ Basic AI 已经工作，会在下注阶段为 AI 席位产生合法决策。LLM 
 
 Remote session 的协议、客户端和真实 WebSocket 集成测试已经覆盖，但 table-3d 默认仍选择 local session。只有受信启动代码显式写入完整 `globalThis.__MCT_ROOM_CONFIG__` 时才启用 remote；credential 不得进入 query、日志或持久化存储。
 
-## 2026-07-29 最终验证
+## 2026-07-29 本地实测
 
-执行环境：Node `v22.17.0`，pnpm `10.29.3`，Windows。
+完整的环境、精确命令、退出结果、warnings、进程清理和证据边界见 [2026-07-29 本地验收记录](validation-2026-07-29.md)。该记录来自开发者工作站，不是 CI。
 
-| 命令/检查 | 最终结果 |
+| 命令/检查 | 本地实测结果 |
 | --- | --- |
 | `pnpm install --frozen-lockfile` | 成功；lockfile unchanged；pnpm 提示 esbuild build script 未批准 |
 | `pnpm build` | 成功；7/7 workspace projects；table-3d chunk 748.23 kB / gzip 195.71 kB warning |
@@ -72,4 +72,4 @@ Remote session 的协议、客户端和真实 WebSocket 集成测试已经覆盖
 5. 对 table-3d 做 dynamic import/manual chunks，消除大于 500 kB 的 bundle warning。
 6. 另行规划 L1-L3 教学、教练、成绩单、真实赌场规则包和多人/语音能力。
 
-相关文档：[README](../../README.md) · [Phase 0-1 计划](../superpowers/plans/2026-07-27-macau-casino-training-phase0-1.md) · [设计规格](../superpowers/specs/2026-07-27-macau-casino-training-design.md)
+相关文档：[README](../../README.md) · [本地验收记录](validation-2026-07-29.md) · [Phase 0-1 计划](../superpowers/plans/2026-07-27-macau-casino-training-phase0-1.md) · [设计规格](../superpowers/specs/2026-07-27-macau-casino-training-design.md)
