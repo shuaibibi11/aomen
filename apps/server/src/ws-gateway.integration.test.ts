@@ -12,8 +12,12 @@ import { WsGateway } from "./ws-gateway.js";
 const JOIN_CREDENTIAL = "integration-credential";
 const openClients: WebSocketTestClient[] = [];
 const openGateways: WsGateway[] = [];
+const runningSchedulers: AutomaticRoundScheduler[] = [];
 
 afterEach(async () => {
+  for (const scheduler of runningSchedulers.splice(0)) {
+    scheduler.stop();
+  }
   await Promise.all(openClients.splice(0).map((client) => client.close()));
   await Promise.all(openGateways.splice(0).map((gateway) => gateway.close()));
 });
@@ -210,6 +214,7 @@ describe("WsGateway real WebSocket integration", () => {
       settlementDisplayMs: 0,
       interRoundDelayMs: 1_000,
     });
+    runningSchedulers.push(scheduler);
 
     scheduler.start();
     const lifecycleIntentTypes = new Set<string>();
@@ -219,8 +224,6 @@ describe("WsGateway real WebSocket integration", () => {
         lifecycleIntentTypes.add(eventMessage.event.intent.type);
       }
     }
-    scheduler.stop();
-
     expect(lifecycleIntentTypes).toEqual(
       new Set(["start_round", "no_more_bets", "deal_next", "settle_round"]),
     );
