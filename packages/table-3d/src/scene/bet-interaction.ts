@@ -64,6 +64,8 @@ export interface BetInteractionOptions {
   readonly onBetAttempt?: (attempt: BetAttempt) => void;
   /** Called when command pending state changes. */
   readonly onPendingChanged?: (pending: boolean) => void;
+  /** Called once when an active asynchronous command fails. */
+  readonly onCommandError?: (error: unknown) => void;
 }
 
 /**
@@ -85,6 +87,8 @@ export class BetInteraction {
   private feltMesh: THREE.Mesh | null = null;
   private selectedDenomination: number;
   private commandPending = false;
+  private commandGeneration = 0;
+  private disposed = false;
 
   constructor(private readonly options: BetInteractionOptions) {
     this.session = options.session;
@@ -190,9 +194,10 @@ export class BetInteraction {
 
   /** Submit a bet and wait for its authoritative session update. */
   async placeBetAtSpot(hit: BetSpotHit): Promise<BetAttempt | null> {
-    if (this.commandPending) {
+    if (this.disposed || this.commandPending) {
       return null;
     }
+    const commandGeneration = ++this.commandGeneration;
     this.setCommandPending(true);
     const amount = this.selectedDenomination;
     try {
@@ -201,6 +206,9 @@ export class BetInteraction {
         hit.spotId as BetKind,
         amount,
       );
+      if (!this.isCurrentCommand(commandGeneration)) {
+        return null;
+      }
       const attempt: BetAttempt = {
         hit,
         amount,
@@ -209,8 +217,15 @@ export class BetInteraction {
       };
       this.options.onBetAttempt?.(attempt);
       return attempt;
+    } catch (error) {
+      if (this.isCurrentCommand(commandGeneration)) {
+        this.options.onCommandError?.(error);
+      }
+      return null;
     } finally {
-      this.setCommandPending(false);
+      if (this.isCurrentCommand(commandGeneration)) {
+        this.setCommandPending(false);
+      }
     }
   }
 
@@ -368,21 +383,38 @@ export class BetInteraction {
 
   /** Release GPU resources when the mode changes away from a table. */
   dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.commandGeneration += 1;
+    this.commandPending = false;
     this.unsubscribeSession();
     this.disposeBetChips();
     this.disposeDealtCards();
   }
 
   private async runCommand(command: () => Promise<unknown>): Promise<void> {
-    if (this.commandPending) {
+    if (this.disposed || this.commandPending) {
       return;
     }
+    const commandGeneration = ++this.commandGeneration;
     this.setCommandPending(true);
     try {
       await command();
+    } catch (error) {
+      if (this.isCurrentCommand(commandGeneration)) {
+        this.options.onCommandError?.(error);
+      }
     } finally {
-      this.setCommandPending(false);
+      if (this.isCurrentCommand(commandGeneration)) {
+        this.setCommandPending(false);
+      }
     }
+  }
+
+  private isCurrentCommand(commandGeneration: number): boolean {
+    return !this.disposed && commandGeneration === this.commandGeneration;
   }
 
   private setCommandPending(pending: boolean): void {

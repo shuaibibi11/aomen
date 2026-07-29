@@ -46,4 +46,27 @@ describe("TableSessionController", () => {
     expect(massSession.disposeCalls).toBe(1);
     expect(vipSession.disposeCalls).toBe(0);
   });
+
+  it("invalidates a pending replacement before reusing the active variant", async () => {
+    const vipResult = createDeferred<TableSession>();
+    const massSession = createFakeSession();
+    const vipSession = createFakeSession();
+    const factory: TableSessionFactory = (options) =>
+      options.variant === "mass"
+        ? Promise.resolve(massSession)
+        : vipResult.promise;
+    const controller = new TableSessionController(factory);
+
+    await controller.open({ variant: "mass" });
+    const openingVip = controller.open({ variant: "vip" });
+    const reopenedMass = await controller.open({ variant: "mass" });
+    vipResult.resolve(vipSession);
+    const staleVip = await openingVip;
+
+    expect(reopenedMass).toBe(massSession);
+    expect(staleVip).toBeNull();
+    expect(controller.current).toBe(massSession);
+    expect(vipSession.disposeCalls).toBe(1);
+    expect(massSession.disposeCalls).toBe(0);
+  });
 });

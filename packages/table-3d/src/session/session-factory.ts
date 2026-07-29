@@ -12,6 +12,7 @@ export const createLocalTableSession: TableSessionFactory = async (options) =>
 export class TableSessionController {
   private activeSession: TableSession | null = null;
   private activeVariant: TableSessionOptions["variant"] | null = null;
+  private requestedVariant: TableSessionOptions["variant"] | null = null;
   private requestSequence = 0;
 
   constructor(private readonly factory: TableSessionFactory) {}
@@ -21,13 +22,17 @@ export class TableSessionController {
   }
 
   async open(options: TableSessionOptions): Promise<TableSession | null> {
+    const requestSequence = ++this.requestSequence;
+    this.requestedVariant = options.variant;
     if (this.activeSession !== null && this.activeVariant === options.variant) {
       return this.activeSession;
     }
 
-    const requestSequence = ++this.requestSequence;
     const createdSession = await this.factory(options);
-    if (requestSequence !== this.requestSequence) {
+    if (
+      requestSequence !== this.requestSequence ||
+      this.requestedVariant !== options.variant
+    ) {
       createdSession.dispose();
       return null;
     }
@@ -43,5 +48,6 @@ export class TableSessionController {
     this.activeSession?.dispose();
     this.activeSession = null;
     this.activeVariant = null;
+    this.requestedVariant = null;
   }
 }

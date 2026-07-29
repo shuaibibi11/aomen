@@ -205,6 +205,11 @@ function wireBettingPanel(previewApp: PreviewApp): void {
     feedback.textContent =
       `拒絕：${attempt.hit.seatLabel} 號 ${spotName} — ${describeRejectReason(attempt.rejectReason)}`;
   });
+  previewApp.setCommandErrorHandler((error) => {
+    feedback.textContent = error instanceof Error
+      ? error.message
+      : "動作失敗";
+  });
   previewApp.setTableStateHandler(refreshPanel);
 
   refreshPanel();

@@ -134,6 +134,7 @@ export class PreviewApp {
   private contentBuildSequence = 0;
   private tableCommandPending = false;
   private onBetAttempt: ((attempt: BetAttempt) => void) | null = null;
+  private onCommandError: ((error: unknown) => void) | null = null;
   private onTableStateChanged: (() => void) | null = null;
 
   constructor(
@@ -194,7 +195,14 @@ export class PreviewApp {
     if (event.button !== 0 || this.betInteraction === null) {
       return;
     }
-    this.betInteraction.handlePointerDown(event, this.canvas, this.camera);
+    const interaction = this.betInteraction;
+    void interaction
+      .handlePointerDown(event, this.canvas, this.camera)
+      .catch((error: unknown) => {
+        if (this.betInteraction === interaction) {
+          this.onCommandError?.(error);
+        }
+      });
   }
 
   /** Three-point studio setup: key, fill and a warm rim to read the gold. */
@@ -279,6 +287,7 @@ export class PreviewApp {
     if (TABLE_MODE_VARIANTS[this.activeMode] === undefined) {
       this.betInteraction?.dispose();
       this.betInteraction = null;
+      this.tableCommandPending = false;
       this.unsubscribeTableSession?.();
       this.unsubscribeTableSession = null;
       this.sessionController.dispose();
@@ -535,14 +544,28 @@ export class PreviewApp {
     this.contentGroup.add(table);
 
     this.betInteraction?.dispose();
+    this.betInteraction = null;
+    this.tableCommandPending = false;
     const interaction = new BetInteraction({
       session,
       theme,
       casinoId: this.activeCasinoId,
       variant,
       surfaceY: TABLE_FOOTPRINT.surfaceY,
-      onBetAttempt: (attempt) => this.onBetAttempt?.(attempt),
+      onBetAttempt: (attempt) => {
+        if (this.betInteraction === interaction) {
+          this.onBetAttempt?.(attempt);
+        }
+      },
+      onCommandError: (error) => {
+        if (this.betInteraction === interaction) {
+          this.onCommandError?.(error);
+        }
+      },
       onPendingChanged: (pending) => {
+        if (this.betInteraction !== interaction) {
+          return;
+        }
         this.tableCommandPending = pending;
         this.onTableStateChanged?.();
       },
@@ -714,6 +737,11 @@ export class PreviewApp {
   /** Report the outcome of each click that landed on a betting spot. */
   setBetAttemptHandler(handler: (attempt: BetAttempt) => void): void {
     this.onBetAttempt = handler;
+  }
+
+  /** Report asynchronous table command failures to the control panel. */
+  setCommandErrorHandler(handler: (error: unknown) => void): void {
+    this.onCommandError = handler;
   }
 
   /** Notify the UI whenever engine state changed and should be re-read. */
