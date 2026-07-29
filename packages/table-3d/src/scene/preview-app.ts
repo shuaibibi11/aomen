@@ -731,6 +731,10 @@ export class PreviewApp {
     return this.betInteraction?.getSelectedDenomination() ?? null;
   }
 
+  getAvailableDenominations(): readonly number[] {
+    return this.betInteraction?.getAvailableDenominations() ?? [];
+  }
+
   setSelectedDenomination(denomination: number): void {
     this.betInteraction?.setSelectedDenomination(denomination);
   }

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   ClientMessageParseError,
+  REMOTE_COMMAND_RECOVERY_WINDOW_MS,
   ROOM_ERROR_CODES,
   ROOM_PROTOCOL_VERSION,
+  SERVER_REQUEST_CACHE_RETENTION_MS,
   ServerMessageParseError,
   isRoomErrorCode,
   parseClientMessage,
@@ -127,6 +129,7 @@ describe("room protocol error codes", () => {
       "internal_error",
       "duplicate_request",
       "request_id_conflict",
+      "request_cache_full",
     ]);
   });
 
@@ -135,8 +138,16 @@ describe("room protocol error codes", () => {
     expect(isRoomErrorCode("intent_not_allowed")).toBe(true);
     expect(isRoomErrorCode("internal_error")).toBe(true);
     expect(isRoomErrorCode("request_id_conflict")).toBe(true);
+    expect(isRoomErrorCode("request_cache_full")).toBe(true);
     expect(isRoomErrorCode("database_exploded")).toBe(false);
     expect(isRoomErrorCode(null)).toBe(false);
+  });
+
+  it("retains server request results beyond the client recovery window", () => {
+    expect(REMOTE_COMMAND_RECOVERY_WINDOW_MS).toBeGreaterThan(0);
+    expect(SERVER_REQUEST_CACHE_RETENTION_MS).toBeGreaterThanOrEqual(
+      REMOTE_COMMAND_RECOVERY_WINDOW_MS,
+    );
   });
 });
 

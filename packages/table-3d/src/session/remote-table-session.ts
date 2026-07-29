@@ -4,6 +4,7 @@ import type {
   RoomSessionCapabilities,
   ServerMessage,
 } from "@mct/room-protocol";
+import { REMOTE_COMMAND_RECOVERY_WINDOW_MS } from "@mct/room-protocol";
 import type {
   RoomConnectionStateSnapshot,
   RoomMessageListener,
@@ -63,6 +64,7 @@ interface PendingCommand {
   readonly resolve: (event: TableEvent) => void;
   readonly reject: (error: Error) => void;
   readonly intent: TableIntent;
+  readonly recoveryDeadlineAt: number;
   timeout: ReturnType<typeof setTimeout> | null;
 }
 
@@ -112,7 +114,8 @@ export class RemoteTableSession implements TableSession {
     this.roomInstanceId = joined.roomInstanceId;
     this.rulePack = joined.rulePack;
     this.snapshot = joined.snapshot;
-    this.commandTimeoutMs = options.commandTimeoutMs ?? 10_000;
+    this.commandTimeoutMs =
+      options.commandTimeoutMs ?? REMOTE_COMMAND_RECOVERY_WINDOW_MS;
     this.ownsConnection = options.ownsConnection ?? true;
     this.createRequestId = options.createRequestId ?? createUniqueRequestId;
     this.capabilities = Object.freeze({ ...joined.capabilities });
@@ -240,7 +243,13 @@ export class RemoteTableSession implements TableSession {
     if (!this.connected) return Promise.reject(new Error("Remote table session disconnected"));
     const requestId = this.createRequestId();
     return new Promise<TableEvent>((resolve, reject) => {
-      const pending: PendingCommand = { resolve, reject, intent, timeout: null };
+      const pending: PendingCommand = {
+        resolve,
+        reject,
+        intent,
+        recoveryDeadlineAt: Date.now() + this.commandTimeoutMs,
+        timeout: null,
+      };
       this.pendingCommands.set(requestId, pending);
       this.startPendingTimeout(requestId, pending);
       void this.connection.submitIntent(requestId, intent).catch((cause) => {
@@ -316,7 +325,6 @@ export class RemoteTableSession implements TableSession {
         this.rejectAllPending(state.lastError ?? new Error("Room join rejected"));
         return;
       }
-      this.pausePendingTimeouts();
       return;
     }
     if (state.state === "closed") {
@@ -358,7 +366,12 @@ export class RemoteTableSession implements TableSession {
     }
     this.applyBootstrapDescriptors(message);
     this.connected = false;
-    for (const listener of this.listeners) listener({ snapshot: message.snapshot });
+    for (const listener of this.listeners) {
+      listener({
+        snapshot: message.snapshot,
+        ...(roomInstanceChanged ? { configurationChanged: true } : {}),
+      });
+    }
     this.resendPendingAfterConnected = !roomInstanceChanged;
   }
 
@@ -376,16 +389,15 @@ export class RemoteTableSession implements TableSession {
     );
   }
 
-  private pausePendingTimeouts(): void {
-    for (const pending of this.pendingCommands.values()) {
-      if (pending.timeout !== null) clearTimeout(pending.timeout);
-      pending.timeout = null;
-    }
-  }
-
   private resendPendingCommands(): void {
     for (const [requestId, pending] of this.pendingCommands) {
-      this.startPendingTimeout(requestId, pending);
+      if (Date.now() >= pending.recoveryDeadlineAt) {
+        this.rejectPending(
+          requestId,
+          new Error(`Remote command timed out: ${requestId}`),
+        );
+        continue;
+      }
       void this.connection.submitIntent(requestId, pending.intent).catch((cause) => {
         if (this.connected) this.rejectPending(requestId, toError(cause, "Remote command resend failed"));
       });
@@ -394,11 +406,15 @@ export class RemoteTableSession implements TableSession {
 
   private startPendingTimeout(requestId: string, pending: PendingCommand): void {
     if (pending.timeout !== null) clearTimeout(pending.timeout);
+    const remainingRecoveryTime = Math.max(
+      0,
+      pending.recoveryDeadlineAt - Date.now(),
+    );
     pending.timeout = setTimeout(() => {
       this.pendingCommands.delete(requestId);
       pending.timeout = null;
       pending.reject(new Error(`Remote command timed out: ${requestId}`));
-    }, this.commandTimeoutMs);
+    }, remainingRecoveryTime);
   }
 
   private resolvePending(requestId: string, event: TableEvent): void {

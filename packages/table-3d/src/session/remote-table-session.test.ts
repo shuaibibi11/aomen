@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { asActorId, asRoundId, asSeatId, asTableId, type TableEvent, type TableSnapshot } from "@mct/shared";
-import { ROOM_PROTOCOL_VERSION, type JoinedMessage, type ServerMessage } from "@mct/room-protocol";
+import {
+  REMOTE_COMMAND_RECOVERY_WINDOW_MS,
+  ROOM_PROTOCOL_VERSION,
+  type JoinedMessage,
+  type ServerMessage,
+} from "@mct/room-protocol";
 import type { RoomConnectionStateSnapshot } from "@mct/room-client";
 import {
   RemoteTableSession,
@@ -171,27 +176,53 @@ describe("RemoteTableSession", () => {
     expect(session.getSnapshot()).toEqual(nextSnapshot);
   });
 
-  it("pauses and resends a pending command with the same request id after same-instance rejoin", async () => {
+  it("resends within the total recovery deadline without extending it across reconnects", async () => {
+    vi.useFakeTimers();
     const connection = new FakeConnection();
     const session = await RemoteTableSession.create({ connection, commandTimeoutMs: 20 });
     const pending = session.placeBet(7, "player", 100);
     const originalRequest = connection.sent[0]!;
 
     connection.emitState({ state: "reconnecting", lastMessageAt: null, lastPongAt: null, reconnectAttempt: 1, lastError: new Error("lost") });
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await vi.advanceTimersByTimeAsync(15);
     connection.emitMessage({ ...joined, snapshot: { ...snapshot, lastEventSeq: 2 } });
     connection.emitState({ state: "connected", lastMessageAt: null, lastPongAt: null, reconnectAttempt: 0, lastError: null });
 
     expect(connection.sent).toHaveLength(2);
     expect(connection.sent[1]).toEqual(originalRequest);
-    const event = createAcceptedEvent(2);
-    connection.emitMessage({ type: "intent_result", roomInstanceId: joined.roomInstanceId, requestId: originalRequest.requestId, event });
-    await expect(pending).resolves.toEqual(event);
+    const pendingRejection = expect(pending).rejects.toThrow(/timed out/i);
+    await vi.advanceTimersByTimeAsync(5);
+    await pendingRejection;
+
+    connection.emitState({ state: "reconnecting", lastMessageAt: null, lastPongAt: null, reconnectAttempt: 1, lastError: new Error("lost again") });
+    connection.emitMessage({ ...joined, snapshot: { ...snapshot, lastEventSeq: 2 } });
+    connection.emitState({ state: "connected", lastMessageAt: null, lastPongAt: null, reconnectAttempt: 0, lastError: null });
+    expect(connection.sent).toHaveLength(2);
+    vi.useRealTimers();
+  });
+
+  it("uses the shared recovery window by default and expires while disconnected", async () => {
+    vi.useFakeTimers();
+    const connection = new FakeConnection();
+    const session = await RemoteTableSession.create({ connection });
+    const pending = session.placeBet(7, "player", 100);
+
+    connection.emitState({ state: "reconnecting", lastMessageAt: null, lastPongAt: null, reconnectAttempt: 1, lastError: new Error("lost") });
+    const pendingRejection = expect(pending).rejects.toThrow(/timed out/i);
+    await vi.advanceTimersByTimeAsync(REMOTE_COMMAND_RECOVERY_WINDOW_MS);
+
+    await pendingRejection;
+    connection.emitMessage(joined);
+    connection.emitState({ state: "connected", lastMessageAt: null, lastPongAt: null, reconnectAttempt: 0, lastError: null });
+    expect(connection.sent).toHaveLength(1);
+    vi.useRealTimers();
   });
 
   it("fully resets on a new room instance and rejects old pending commands", async () => {
     const connection = new FakeConnection();
     const session = await RemoteTableSession.create({ connection });
+    const updates: Array<{ configurationChanged?: boolean }> = [];
+    session.subscribe((update) => updates.push(update));
     const pending = session.placeBet(7, "player", 100);
     connection.emitState({ state: "reconnecting", lastMessageAt: null, lastPongAt: null, reconnectAttempt: 1, lastError: new Error("lost") });
     const replacementSeatId = asSeatId("replacement-seat");
@@ -210,6 +241,7 @@ describe("RemoteTableSession", () => {
     expect(session.getSeats()).toEqual([{ seatId: replacementSeatId, label: 3, occupantId: actorId }]);
     expect(session.getSnapshot().lastEventSeq).toBe(0);
     expect(connection.sent).toHaveLength(1);
+    expect(updates.at(-1)).toMatchObject({ configurationChanged: true });
   });
 
   it("rejects new commands while disconnected and ignores stale-instance updates", async () => {
@@ -234,6 +266,19 @@ describe("RemoteTableSession", () => {
     connection.emitMessage({ ...joined, snapshot: { ...snapshot, lastEventSeq: 0 } });
 
     expect(session.getSnapshot()).toEqual(snapshot);
+  });
+
+  it("does not mark a same-instance bootstrap as a configuration reset", async () => {
+    const connection = new FakeConnection();
+    const session = await RemoteTableSession.create({ connection });
+    const listener = vi.fn();
+    session.subscribe(listener);
+
+    connection.emitMessage({ ...joined, snapshot: { ...snapshot, lastEventSeq: 2 } });
+
+    expect(listener).toHaveBeenCalledWith(expect.not.objectContaining({
+      configurationChanged: true,
+    }));
   });
 
   it("rejects a command when its correlated engine event is rejected", async () => {

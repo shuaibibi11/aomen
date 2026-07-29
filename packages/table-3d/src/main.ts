@@ -21,6 +21,7 @@ import {
 } from "./specs/table-layout.js";
 import { createConfiguredTableSessionFactory } from "./session/session-factory.js";
 import { readSessionRuntimeConfig } from "./session/session-runtime-config.js";
+import { createDenominationOptionGroup } from "./ui/denomination-option-group.js";
 
 function requireElement<T extends HTMLElement>(elementId: string): T {
   const element = document.getElementById(elementId);
@@ -139,13 +140,26 @@ function wireBettingPanel(previewApp: PreviewApp): void {
     readonly button: HTMLButtonElement;
     readonly capability: "canClearBets" | "canControlDealer";
   }> = [];
+  const denominationOptionGroup = createDenominationOptionGroup(
+    denominationContainer,
+    () => document.createElement("button"),
+    (denomination) => previewApp.setSelectedDenomination(denomination),
+  );
 
   const refreshPanel = (): void => {
     const session = previewApp.getBetSession();
     panel.hidden = session === null;
     if (session === null) {
+      denominationOptionGroup.dispose();
       return;
     }
+
+    const rulePack = session.getRulePack();
+    denominationOptionGroup.sync(
+      rulePack.chipset.currency,
+      previewApp.getAvailableDenominations(),
+      previewApp.getSelectedDenomination() ?? 0,
+    );
 
     const commandPending = previewApp.isTableCommandPending();
     const capabilities = session.getCapabilities();
@@ -173,21 +187,6 @@ function wireBettingPanel(previewApp: PreviewApp): void {
       .map(([label, value]) => `<dt>${label}</dt><dd>${value}</dd>`)
       .join("");
   };
-
-  // Denominations come from the rule pack's chipset, so the buttons cannot
-  // offer a chip the table does not deal in.
-  const initialSession = previewApp.getBetSession();
-  const denominations = initialSession?.getRulePack().chipset.denominations ?? [];
-  const currency = initialSession?.getRulePack().chipset.currency ?? "";
-  buildOptionGroup(
-    denominationContainer,
-    denominations.map((value: number) => ({
-      value: String(value),
-      label: `${currency} ${value.toLocaleString("en-US")}`,
-    })),
-    String(previewApp.getSelectedDenomination() ?? denominations[0] ?? ""),
-    (value) => previewApp.setSelectedDenomination(Number(value)),
-  );
 
   const actions: ReadonlyArray<{
     label: string;

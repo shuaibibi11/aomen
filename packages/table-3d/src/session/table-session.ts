@@ -30,6 +30,8 @@ export interface SessionSeat {
 export interface TableSessionUpdate {
   readonly event?: TableEvent;
   readonly snapshot: TableSnapshot;
+  /** True only when a reset replaced rule and bootstrap configuration. */
+  readonly configurationChanged?: boolean;
 }
 
 export type TableSessionListener = (update: TableSessionUpdate) => void;
@@ -63,7 +65,10 @@ export interface TableSessionNotifier {
   subscribe(listener: TableSessionListener): TableSessionUnsubscribe;
   publish(event: TableEvent): void;
   publishSnapshot(snapshot: TableSnapshot): void;
-  resetWithSnapshot(snapshot: TableSnapshot): void;
+  resetWithSnapshot(
+    snapshot: TableSnapshot,
+    options?: { readonly configurationChanged?: boolean },
+  ): void;
   dispose(): void;
 }
 
@@ -110,13 +115,13 @@ export function createTableSessionNotifier(
         listener({ snapshot });
       }
     },
-    resetWithSnapshot(snapshot) {
+    resetWithSnapshot(snapshot, options = {}) {
       if (disposed) {
         return;
       }
       lastPublishedSequence = snapshot.lastEventSeq;
       for (const listener of listeners) {
-        listener({ snapshot });
+        listener({ snapshot, ...options });
       }
     },
     dispose() {

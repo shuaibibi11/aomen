@@ -2,7 +2,10 @@ import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import type { RulePack } from "@mct/rule-packs";
-import type { ServerMessage } from "@mct/room-protocol";
+import {
+  SERVER_REQUEST_CACHE_RETENTION_MS,
+  type ServerMessage,
+} from "@mct/room-protocol";
 import {
   asActorId,
   asTableId,
@@ -60,7 +63,13 @@ class ControllableEventStore implements EventStore {
   }
 }
 
-async function createGateway(onError?: (error: unknown) => void) {
+async function createGateway(
+  onError?: (error: unknown) => void,
+  cacheOptions: {
+    readonly now?: () => number;
+    readonly maximumRequestResultsPerScope?: number;
+  } = {},
+) {
   const tableId = asTableId("gateway-table");
   const humanActorId = asActorId("gateway-human");
   const store = new ControllableEventStore();
@@ -75,7 +84,12 @@ async function createGateway(onError?: (error: unknown) => void) {
     shoeSeed: "gateway-seed",
   });
   const webSocketServer = new WebSocketServer({ port: 0 });
-  const gateway = new WsGateway({ roomManager, webSocketServer, onError });
+  const gateway = new WsGateway({
+    roomManager,
+    webSocketServer,
+    onError,
+    ...cacheOptions,
+  });
   openGateways.push(gateway);
   if (webSocketServer.address() === null) {
     await once(webSocketServer, "listening");
@@ -416,6 +430,60 @@ describe("WsGateway room delivery", () => {
 
     expect(await replayedResult).toEqual(originalResult);
     expect(store.count()).toBe(eventCountBefore + 1);
+    socket.close();
+  });
+
+  it("rejects a new request when an actor cache is full without evicting live results", async () => {
+    let currentTime = 0;
+    const { humanActorId, room, store, tableId, url } = await createGateway(
+      undefined,
+      { now: () => currentTime, maximumRequestResultsPerScope: 1 },
+    );
+    const socket = await connectClient(url);
+    await joinClient(socket, tableId, humanActorId);
+    room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+    const createRequest = (requestId: string, betKind: "player" | "banker") => ({
+      type: "submit_intent",
+      requestId,
+      intent: {
+        type: "place_bet",
+        actorId: humanActorId,
+        seatId: room.getHumanSeatId(),
+        betKind,
+        amount: 100,
+      },
+    });
+    const firstRequest = createRequest("retained-request", "player");
+    const firstResultPromise = waitForMessage(socket, (message) =>
+      message.type === "intent_result" && message.requestId === "retained-request");
+    socket.send(JSON.stringify(firstRequest));
+    const firstResult = await firstResultPromise;
+    const eventCountAfterFirstRequest = store.count();
+
+    const capacityErrorPromise = waitForMessage(socket, (message) =>
+      message.type === "error" && message.requestId === "blocked-request");
+    socket.send(JSON.stringify(createRequest("blocked-request", "banker")));
+    expect(await capacityErrorPromise).toMatchObject({
+      type: "error",
+      code: "request_cache_full",
+    });
+    expect(store.count()).toBe(eventCountAfterFirstRequest);
+
+    const replayPromise = waitForMessage(socket, (message) =>
+      message.type === "intent_result" && message.requestId === "retained-request");
+    socket.send(JSON.stringify(firstRequest));
+    expect(await replayPromise).toEqual(firstResult);
+    expect(store.count()).toBe(eventCountAfterFirstRequest);
+
+    currentTime = SERVER_REQUEST_CACHE_RETENTION_MS;
+    const replacementResultPromise = waitForMessage(socket, (message) =>
+      "requestId" in message && message.requestId === "blocked-request");
+    socket.send(JSON.stringify(createRequest("blocked-request", "banker")));
+    expect(await replacementResultPromise).toMatchObject({
+      type: "intent_result",
+      requestId: "blocked-request",
+    });
+    expect(store.count()).toBe(eventCountAfterFirstRequest + 1);
     socket.close();
   });
 

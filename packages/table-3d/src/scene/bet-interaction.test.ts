@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { RulePack } from "@mct/rule-packs";
 import { LocalTableSession } from "../session/local-table-session.js";
 import { getCasinoTheme } from "../specs/casino-theme.js";
 import { BetInteraction } from "./bet-interaction.js";
@@ -51,6 +52,61 @@ function createPlayerHit(session: LocalTableSession) {
 }
 
 describe("BetInteraction", () => {
+  it("refreshes denominations and the selected amount after a configuration reset", async () => {
+    const session = new LocalTableSession({ variant: "mass" });
+    let sessionListener!: Parameters<typeof session.subscribe>[0];
+    vi.spyOn(session, "subscribe").mockImplementation((listener) => {
+      sessionListener = listener;
+      return vi.fn();
+    });
+    let currentRulePack = {
+      ...session.getRulePack(),
+      limits: { min: 100, max: 10_000 },
+      chipset: { currency: "HKD", denominations: [100, 500] },
+    } satisfies RulePack;
+    vi.spyOn(session, "getRulePack").mockImplementation(() => currentRulePack);
+    const interaction = createInteraction(session);
+    interaction.setSelectedDenomination(500);
+
+    currentRulePack = {
+      ...currentRulePack,
+      id: "replacement-pack",
+      limits: { min: 1_000, max: 50_000 },
+      chipset: { currency: "MOP", denominations: [1_000, 5_000] },
+    };
+    sessionListener({
+      snapshot: session.getSnapshot(),
+      configurationChanged: true,
+    });
+
+    expect(interaction.getAvailableDenominations()).toEqual([1_000, 5_000]);
+    expect(interaction.getSelectedDenomination()).toBe(1_000);
+    const placeBet = vi.spyOn(session, "placeBet");
+    await interaction.placeBetAtSpot(createPlayerHit(session));
+    expect(placeBet).toHaveBeenCalledWith(
+      session.getGuestSeat().label,
+      "player",
+      1_000,
+    );
+  });
+
+  it("does not rebuild denomination state for an ordinary snapshot", () => {
+    const session = new LocalTableSession({ variant: "mass" });
+    let sessionListener!: Parameters<typeof session.subscribe>[0];
+    vi.spyOn(session, "subscribe").mockImplementation((listener) => {
+      sessionListener = listener;
+      return vi.fn();
+    });
+    const getRulePack = vi.spyOn(session, "getRulePack");
+    const interaction = createInteraction(session);
+    const readsAfterConstruction = getRulePack.mock.calls.length;
+
+    sessionListener({ snapshot: session.getSnapshot() });
+
+    expect(getRulePack).toHaveBeenCalledTimes(readsAfterConstruction);
+    expect(interaction.getSelectedDenomination()).toBeGreaterThan(0);
+  });
+
   it("does not submit a bet when the session capability disables betting", async () => {
     const session = new LocalTableSession({ variant: "mass" });
     vi.spyOn(session, "getCapabilities").mockReturnValue({

@@ -149,10 +149,15 @@ describe("table session notifier", () => {
     notifier.subscribe(listener);
     notifier.publishSnapshot({ lastEventSeq: 42 } as TableSnapshot);
 
-    notifier.resetWithSnapshot({ lastEventSeq: 1 } as TableSnapshot);
+    notifier.resetWithSnapshot({ lastEventSeq: 1 } as TableSnapshot, {
+      configurationChanged: true,
+    });
     notifier.publishSnapshot({ lastEventSeq: 1 } as TableSnapshot);
 
     expect(listener).toHaveBeenCalledTimes(2);
-    expect(listener).toHaveBeenLastCalledWith({ snapshot: { lastEventSeq: 1 } });
+    expect(listener).toHaveBeenLastCalledWith({
+      snapshot: { lastEventSeq: 1 },
+      configurationChanged: true,
+    });
   });
 });

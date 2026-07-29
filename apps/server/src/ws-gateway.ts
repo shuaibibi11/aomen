@@ -13,6 +13,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import {
   ClientMessageParseError,
   ROOM_PROTOCOL_VERSION,
+  SERVER_REQUEST_CACHE_RETENTION_MS,
   parseClientMessage,
   type ClientMessage,
   type IntentResultMessage,
@@ -34,6 +35,9 @@ export interface WsGatewayOptions {
   readonly webSocketServer?: WebSocketServer;
   readonly roomManager: RoomManager;
   readonly onError?: (error: unknown) => void;
+  /** Injectable monotonic wall clock for deterministic cache-expiry tests. */
+  readonly now?: () => number;
+  readonly maximumRequestResultsPerScope?: number;
 }
 
 interface SocketContext {
@@ -47,6 +51,7 @@ const MAXIMUM_REQUEST_RESULTS_PER_ACTOR = 1024;
 interface CachedIntentResult {
   readonly intentFingerprint: string;
   readonly result: IntentResultMessage;
+  readonly cachedAt: number;
 }
 
 function createCanonicalFingerprint(value: unknown): string {
@@ -80,6 +85,8 @@ export class WsGateway {
   private readonly listeningPromise: Promise<void>;
   private readonly roomManager: RoomManager;
   private readonly onError: (error: unknown) => void;
+  private readonly now: () => number;
+  private readonly maximumRequestResultsPerScope: number;
   private closing = false;
   private serverCloseCompleted = false;
   private closePromise: Promise<void> | null = null;
@@ -102,6 +109,15 @@ export class WsGateway {
       throw new Error("Provide exactly one of port or webSocketServer");
     }
     this.roomManager = options.roomManager;
+    this.now = options.now ?? Date.now;
+    this.maximumRequestResultsPerScope =
+      options.maximumRequestResultsPerScope ?? MAXIMUM_REQUEST_RESULTS_PER_ACTOR;
+    if (
+      !Number.isInteger(this.maximumRequestResultsPerScope)
+      || this.maximumRequestResultsPerScope <= 0
+    ) {
+      throw new Error("maximumRequestResultsPerScope must be a positive integer");
+    }
     this.onError =
       options.onError ??
       ((error) => {
@@ -348,6 +364,8 @@ export class WsGateway {
       });
       return;
     }
+    const currentTime = this.now();
+    this.removeExpiredRequestResults(currentTime);
     const intentFingerprint = createCanonicalFingerprint(message.intent);
     const actorRequestResults = this.getActorRequestResults(
       context.roomInstanceId,
@@ -397,6 +415,15 @@ export class WsGateway {
       });
       return;
     }
+    if (actorRequestResults.size >= this.maximumRequestResultsPerScope) {
+      this.send(socket, {
+        type: "error",
+        code: "request_cache_full",
+        message: "The request recovery cache is full; retry later",
+        requestId,
+      });
+      return;
+    }
 
     try {
       const event = room.submitIntent(message.intent);
@@ -406,15 +433,11 @@ export class WsGateway {
         requestId,
         event,
       };
-      actorRequestResults.set(requestId, { intentFingerprint, result });
-      if (actorRequestResults.size > MAXIMUM_REQUEST_RESULTS_PER_ACTOR) {
-        const oldestRequestId = actorRequestResults.keys().next().value as
-          | string
-          | undefined;
-        if (oldestRequestId !== undefined) {
-          actorRequestResults.delete(oldestRequestId);
-        }
-      }
+      actorRequestResults.set(requestId, {
+        intentFingerprint,
+        result,
+        cachedAt: currentTime,
+      });
       this.send(socket, result);
     } catch (error) {
       this.reportError(error);
@@ -442,6 +465,25 @@ export class WsGateway {
       roomRequestResults.set(actorId, actorRequestResults);
     }
     return actorRequestResults;
+  }
+
+  private removeExpiredRequestResults(currentTime: number): void {
+    for (const [roomInstanceId, roomRequestResults] of this.requestResults) {
+      for (const [actorId, actorRequestResults] of roomRequestResults) {
+        for (const [requestId, cachedRequest] of actorRequestResults) {
+          const cacheAge = currentTime - cachedRequest.cachedAt;
+          if (cacheAge >= SERVER_REQUEST_CACHE_RETENTION_MS) {
+            actorRequestResults.delete(requestId);
+          }
+        }
+        if (actorRequestResults.size === 0) {
+          roomRequestResults.delete(actorId);
+        }
+      }
+      if (roomRequestResults.size === 0) {
+        this.requestResults.delete(roomInstanceId);
+      }
+    }
   }
 
   private reportError(error: unknown): void {

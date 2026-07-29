@@ -239,7 +239,7 @@ describe("WsGateway real WebSocket integration", () => {
     expect(store.count()).toBe(eventCountAfterOriginal);
   });
 
-  it("evicts the oldest request after 1024 requests for one table and actor", async () => {
+  it("rejects overflow without evicting a live request from the actor cache", async () => {
     const { roomManager, store, url } = await createSelfHostedGateway();
     const room = createRoom(roomManager, "request-eviction");
     room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
@@ -258,19 +258,28 @@ describe("WsGateway real WebSocket integration", () => {
       },
     });
 
-    for (let requestIndex = 0; requestIndex < 1_025; requestIndex += 1) {
+    for (let requestIndex = 0; requestIndex < 1_024; requestIndex += 1) {
       client.send(buildRequest(`bounded-${requestIndex}`));
       await client.waitForMessage(
         (message) => message.type === "intent_result" && message.requestId === `bounded-${requestIndex}`,
       );
     }
-    const eventCountBeforeEvictedRetry = store.count();
+    const eventCountAtCapacity = store.count();
+    client.send(buildRequest("bounded-overflow"));
+    expect(await client.waitForMessage(
+      (message) => message.type === "error" && message.requestId === "bounded-overflow",
+    )).toMatchObject({
+      type: "error",
+      code: "request_cache_full",
+    });
+    expect(store.count()).toBe(eventCountAtCapacity);
+
     client.send(buildRequest("bounded-0"));
 
     await client.waitForMessage(
       (message) => message.type === "intent_result" && message.requestId === "bounded-0",
     );
-    expect(store.count()).toBe(eventCountBeforeEvictedRetry + 1);
+    expect(store.count()).toBe(eventCountAtCapacity);
   }, 20_000);
 
   it("isolates identical request identifiers between tables and actors", async () => {

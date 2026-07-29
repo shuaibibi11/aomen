@@ -31,6 +31,12 @@ import { validateRulePack } from "@mct/rule-packs/validate";
 /** Protocol version, bumped when a breaking change lands on the wire. */
 export const ROOM_PROTOCOL_VERSION = 4;
 
+/** Maximum time a client may automatically replay one unresolved command. */
+export const REMOTE_COMMAND_RECOVERY_WINDOW_MS = 30_000;
+
+/** Server results outlive every automatic client replay of the same request. */
+export const SERVER_REQUEST_CACHE_RETENTION_MS = 60_000;
+
 /** Opaque identity of one live incarnation of a logical room. */
 export type RoomInstanceId = string;
 
@@ -281,6 +287,7 @@ export const ROOM_ERROR_CODES = [
   "internal_error",
   "duplicate_request",
   "request_id_conflict",
+  "request_cache_full",
 ] as const;
 
 export type RoomErrorCode = (typeof ROOM_ERROR_CODES)[number];

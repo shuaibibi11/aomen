@@ -85,6 +85,7 @@ export class BetInteraction {
   private readonly pointerNdc = new THREE.Vector2();
 
   private feltMesh: THREE.Mesh | null = null;
+  private availableDenominations: readonly number[] = [];
   private selectedDenomination: number;
   private commandPending = false;
   private commandGeneration = 0;
@@ -98,13 +99,12 @@ export class BetInteraction {
     this.dealtCardGroup.name = "engine-dealt-cards";
     this.dealtCardGroup.position.y = options.surfaceY;
 
-    const denominations = this.session.getRulePack().chipset.denominations;
-    // Default to the smallest denomination that satisfies the table minimum.
-    this.selectedDenomination =
-      denominations.find(
-        (value) => value >= this.session.getRulePack().limits.min,
-      ) ?? this.session.getRulePack().limits.min;
-    this.unsubscribeSession = this.session.subscribe(() => {
+    this.selectedDenomination = 0;
+    this.refreshRuleConfiguration();
+    this.unsubscribeSession = this.session.subscribe((update) => {
+      if (update.configurationChanged === true) {
+        this.refreshRuleConfiguration();
+      }
       this.refreshFromSnapshot();
     });
   }
@@ -127,8 +127,14 @@ export class BetInteraction {
     return this.selectedDenomination;
   }
 
+  getAvailableDenominations(): readonly number[] {
+    return this.availableDenominations;
+  }
+
   setSelectedDenomination(denomination: number): void {
-    this.selectedDenomination = denomination;
+    if (this.availableDenominations.includes(denomination)) {
+      this.selectedDenomination = denomination;
+    }
   }
 
   isPending(): boolean {
@@ -272,6 +278,22 @@ export class BetInteraction {
   private refreshFromSnapshot(): void {
     this.refreshBetChips();
     this.refreshDealtCards();
+  }
+
+  private refreshRuleConfiguration(): void {
+    const rulePack = this.session.getRulePack();
+    const availableDenominations = rulePack.chipset.denominations.filter(
+      (denomination) => denomination >= rulePack.limits.min,
+    );
+    if (availableDenominations.length === 0) {
+      throw new Error(
+        `Rule pack ${rulePack.id} has no denomination meeting its table minimum`,
+      );
+    }
+    this.availableDenominations = Object.freeze([...availableDenominations]);
+    if (!this.availableDenominations.includes(this.selectedDenomination)) {
+      this.selectedDenomination = this.availableDenominations[0]!;
+    }
   }
 
   /**
