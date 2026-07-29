@@ -24,6 +24,10 @@ import type { RulePack } from "@mct/rule-packs";
 import { TableRuntime, createShoe } from "@mct/table-engine";
 import { BasicPlayerAi } from "./ai/basic-player-ai.js";
 import type { EventStore } from "./memory-event-store.js";
+import type {
+  RoomUpdateListener,
+  UnsubscribeRoomUpdates,
+} from "./room-events.js";
 
 export interface CreateRoomOptions {
   readonly tableId: TableId;
@@ -57,9 +61,17 @@ export class Room {
   private readonly humanSeatId: SeatId;
   private readonly aiSeats: readonly SeatedAi[];
   private readonly store: EventStore;
+  private readonly listeners = new Set<RoomUpdateListener>();
 
-  constructor(options: CreateRoomOptions, store: EventStore) {
+  constructor(
+    options: CreateRoomOptions,
+    store: EventStore,
+    initialListener?: RoomUpdateListener,
+  ) {
     this.store = store;
+    if (initialListener !== undefined) {
+      this.listeners.add(initialListener);
+    }
 
     const seatIds = Array.from({ length: options.seatCount }, (_unused, index) =>
       asSeatId(`${options.tableId}-seat-${index + 1}`),
@@ -129,6 +141,15 @@ export class Room {
   ): TableEvent {
     const event = this.runtime.submitIntent(intent);
     this.store.append(event);
+    const snapshot = this.runtime.getSnapshot();
+    if (event.seq !== snapshot.lastEventSeq) {
+      throw new Error(
+        `Room update sequence mismatch: event ${event.seq}, snapshot ${snapshot.lastEventSeq}`,
+      );
+    }
+    for (const listener of this.listeners) {
+      listener({ event, snapshot });
+    }
     return event;
   }
 
@@ -159,6 +180,13 @@ export class Room {
 
   getHumanSeatId(): SeatId {
     return this.humanSeatId;
+  }
+
+  subscribe(listener: RoomUpdateListener): UnsubscribeRoomUpdates {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   /**
@@ -201,6 +229,10 @@ export class Room {
  */
 export class RoomManager {
   private readonly rooms = new Map<TableId, Room>();
+  private readonly listenersByTable = new Map<
+    TableId,
+    Set<RoomUpdateListener>
+  >();
 
   constructor(private readonly store: EventStore) {}
 
@@ -210,12 +242,40 @@ export class RoomManager {
       throw new Error(`Room already exists for table ${options.tableId}`);
     }
 
-    const room = new Room(options, this.store);
+    const room = new Room(options, this.store, (update) => {
+      const listeners = this.listenersByTable.get(options.tableId);
+      if (listeners === undefined) {
+        return;
+      }
+      for (const listener of listeners) {
+        listener(update);
+      }
+    });
     this.rooms.set(options.tableId, room);
     return room;
   }
 
   getRoom(tableId: TableId): Room | undefined {
     return this.rooms.get(tableId);
+  }
+
+  subscribe(
+    tableId: TableId,
+    listener: RoomUpdateListener,
+  ): UnsubscribeRoomUpdates {
+    let listeners = this.listenersByTable.get(tableId);
+    if (listeners === undefined) {
+      listeners = new Set<RoomUpdateListener>();
+      this.listenersByTable.set(tableId, listeners);
+    }
+    listeners.add(listener);
+
+    return () => {
+      const currentListeners = this.listenersByTable.get(tableId);
+      currentListeners?.delete(listener);
+      if (currentListeners?.size === 0) {
+        this.listenersByTable.delete(tableId);
+      }
+    };
   }
 }
