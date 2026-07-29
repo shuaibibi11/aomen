@@ -42,6 +42,7 @@ const rulePack = {
 
 const joinedMessage = {
   type: "joined" as const,
+  roomInstanceId: "room-instance-1",
   tableId: "table-1",
   actorId: "human-1",
   protocolVersion: ROOM_PROTOCOL_VERSION,
@@ -98,12 +99,17 @@ class FakeSocket implements WebSocketLike {
   }
 
   message(value: unknown): void {
-    const enrichedValue = typeof value === "object" && value !== null
-      && "type" in value && value.type === "joined"
+    const isRoomScopedMessage = typeof value === "object" && value !== null
+      && "type" in value
+      && ["joined", "event", "snapshot", "intent_result"].includes(String(value.type));
+    const enrichedValue = isRoomScopedMessage
       ? {
-          rulePack,
-          seats: joinedMessage.seats,
-          capabilities: joinedMessage.capabilities,
+          roomInstanceId: joinedMessage.roomInstanceId,
+          ...(value.type === "joined" ? {
+            rulePack,
+            seats: joinedMessage.seats,
+            capabilities: joinedMessage.capabilities,
+          } : {}),
           ...value,
         }
       : value;

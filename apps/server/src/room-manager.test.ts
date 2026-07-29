@@ -78,6 +78,40 @@ class FailingEventStore implements EventStore {
 }
 
 describe("RoomManager", () => {
+  it("creates a non-empty room instance id and accepts deterministic injection", () => {
+    const { room } = createRoom();
+    expect(room.getRoomInstanceId()).not.toHaveLength(0);
+
+    const manager = new RoomManager(new MemoryEventStore());
+    const injectedRoom = manager.createRoom({
+      tableId: asTableId("injected-instance-table"),
+      roomInstanceId: "deterministic-room-instance",
+      rulePack: devPack(),
+      humanActorId: HUMAN,
+      joinCredential: JOIN_CREDENTIAL,
+      seatCount: 1,
+      aiCount: 0,
+      shoeSeed: "injected-instance-seed",
+    });
+
+    expect(injectedRoom.getRoomInstanceId()).toBe("deterministic-room-instance");
+  });
+
+  it("rejects an empty injected room instance id", () => {
+    const manager = new RoomManager(new MemoryEventStore());
+
+    expect(() => manager.createRoom({
+      tableId: asTableId("empty-instance-table"),
+      roomInstanceId: " ",
+      rulePack: devPack(),
+      humanActorId: HUMAN,
+      joinCredential: JOIN_CREDENTIAL,
+      seatCount: 1,
+      aiCount: 0,
+      shoeSeed: "empty-instance-seed",
+    })).toThrow(/roomInstanceId must be a non-empty string/);
+  });
+
   it("requires the configured human actor and credential together", () => {
     const { manager, room } = createRoom();
     const aiActorId = room

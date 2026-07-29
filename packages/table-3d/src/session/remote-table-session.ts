@@ -1,5 +1,6 @@
 import type {
   JoinedMessage,
+  RoomInstanceId,
   RoomSessionCapabilities,
   ServerMessage,
 } from "@mct/room-protocol";
@@ -26,6 +27,7 @@ import type {
 } from "./table-session.js";
 
 const MAXIMUM_CACHED_EVENTS = 1024;
+const TRANSIENT_JOIN_ERROR_CODES = new Set(["room_unavailable", "internal_error"]);
 
 export interface RemoteRoomConnection {
   connect(): Promise<JoinedMessage>;
@@ -42,6 +44,13 @@ export class UnsupportedSessionCommandError extends Error {
   }
 }
 
+export class RoomInstanceChangedError extends Error {
+  constructor(previousInstanceId: RoomInstanceId, nextInstanceId: RoomInstanceId) {
+    super(`Room instance changed from ${previousInstanceId} to ${nextInstanceId}`);
+    this.name = "RoomInstanceChangedError";
+  }
+}
+
 export interface RemoteTableSessionCreateOptions {
   readonly connection: RemoteRoomConnection;
   readonly commandTimeoutMs?: number;
@@ -53,16 +62,18 @@ export interface RemoteTableSessionCreateOptions {
 interface PendingCommand {
   readonly resolve: (event: TableEvent) => void;
   readonly reject: (error: Error) => void;
-  readonly timeout: ReturnType<typeof setTimeout>;
+  readonly intent: TableIntent;
+  timeout: ReturnType<typeof setTimeout> | null;
 }
 
 export class RemoteTableSession implements TableSession {
   private readonly connection: RemoteRoomConnection;
   private readonly actorId: JoinedMessage["actorId"];
-  private readonly rulePack: RulePack;
-  private readonly seats: readonly SessionSeat[];
-  private readonly guestSeat: SessionSeat;
-  private readonly betSpots: readonly BetSpotSpec[];
+  private rulePack: RulePack;
+  private seats: readonly SessionSeat[];
+  private guestSeat: SessionSeat;
+  private betSpots: readonly BetSpotSpec[];
+  private roomInstanceId: RoomInstanceId;
   private readonly commandTimeoutMs: number;
   private readonly ownsConnection: boolean;
   private readonly createRequestId: () => string;
@@ -75,6 +86,7 @@ export class RemoteTableSession implements TableSession {
   private readonly unsubscribeState: () => void;
   private snapshot: TableSnapshot;
   private connected = true;
+  private resendPendingAfterConnected = false;
   private disposed = false;
 
   static async create(options: RemoteTableSessionCreateOptions): Promise<RemoteTableSession> {
@@ -97,20 +109,14 @@ export class RemoteTableSession implements TableSession {
   private constructor(options: RemoteTableSessionCreateOptions, joined: JoinedMessage) {
     this.connection = options.connection;
     this.actorId = joined.actorId;
+    this.roomInstanceId = joined.roomInstanceId;
     this.rulePack = joined.rulePack;
     this.snapshot = joined.snapshot;
     this.commandTimeoutMs = options.commandTimeoutMs ?? 10_000;
     this.ownsConnection = options.ownsConnection ?? true;
     this.createRequestId = options.createRequestId ?? createUniqueRequestId;
     this.capabilities = Object.freeze({ ...joined.capabilities });
-    this.seats = joined.seats
-      .filter((seat): seat is typeof seat & { occupantId: NonNullable<typeof seat.occupantId> } =>
-        seat.occupantId !== null)
-      .map((seat) => Object.freeze({
-        label: seat.label,
-        seatId: seat.seatId,
-        occupantId: seat.occupantId,
-      }));
+    this.seats = createOccupiedSeats(joined);
     const guestSeat = this.seats.find((seat) => seat.occupantId === joined.actorId);
     if (guestSeat === undefined) {
       throw new Error("Joined actor does not occupy an authoritative seat");
@@ -234,19 +240,28 @@ export class RemoteTableSession implements TableSession {
     if (!this.connected) return Promise.reject(new Error("Remote table session disconnected"));
     const requestId = this.createRequestId();
     return new Promise<TableEvent>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingCommands.delete(requestId);
-        reject(new Error(`Remote command timed out: ${requestId}`));
-      }, this.commandTimeoutMs);
-      this.pendingCommands.set(requestId, { resolve, reject, timeout });
+      const pending: PendingCommand = { resolve, reject, intent, timeout: null };
+      this.pendingCommands.set(requestId, pending);
+      this.startPendingTimeout(requestId, pending);
       void this.connection.submitIntent(requestId, intent).catch((cause) => {
-        this.rejectPending(requestId, toError(cause, "Remote command send failed"));
+        if (this.connected) {
+          this.rejectPending(requestId, toError(cause, "Remote command send failed"));
+        }
       });
     });
   }
 
   private handleMessage(message: ServerMessage): void {
     if (this.disposed) return;
+    if (
+      message.type !== "joined"
+      && message.type !== "error"
+      && message.type !== "pong"
+      && message.roomInstanceId !== this.roomInstanceId
+    ) {
+      console.error(`Ignored ${message.type} from stale room instance ${message.roomInstanceId}`);
+      return;
+    }
     switch (message.type) {
       case "intent_result":
         if (message.event.accepted === false) {
@@ -284,11 +299,29 @@ export class RemoteTableSession implements TableSession {
     const connected = state.state === "connected";
     if (connected) {
       this.connected = true;
+      if (this.resendPendingAfterConnected) {
+        this.resendPendingAfterConnected = false;
+        this.resendPendingCommands();
+      }
       return;
     }
-    if (["reconnecting", "disconnected", "closed"].includes(state.state)) {
+    if (["reconnecting", "disconnected"].includes(state.state)) {
       this.connected = false;
-      this.rejectAllPending(new Error("Remote table session disconnected"));
+      const joinErrorCode = readJoinErrorCode(state.lastError);
+      if (
+        state.state === "disconnected"
+        && joinErrorCode !== null
+        && !TRANSIENT_JOIN_ERROR_CODES.has(joinErrorCode)
+      ) {
+        this.rejectAllPending(state.lastError ?? new Error("Room join rejected"));
+        return;
+      }
+      this.pausePendingTimeouts();
+      return;
+    }
+    if (state.state === "closed") {
+      this.connected = false;
+      this.rejectAllPending(new Error("Remote table session permanently closed"));
     }
   }
 
@@ -314,17 +347,65 @@ export class RemoteTableSession implements TableSession {
 
   private applyRejoinedBootstrap(message: JoinedMessage): void {
     if (message.actorId !== this.actorId) return;
-    if (message.snapshot.lastEventSeq < this.snapshot.lastEventSeq) return;
-    this.capabilities = Object.freeze({ ...message.capabilities });
-    this.snapshot = message.snapshot;
+    const roomInstanceChanged = message.roomInstanceId !== this.roomInstanceId;
+    if (!roomInstanceChanged && message.snapshot.lastEventSeq < this.snapshot.lastEventSeq) return;
+    if (roomInstanceChanged) {
+      const previousInstanceId = this.roomInstanceId;
+      this.roomInstanceId = message.roomInstanceId;
+      this.eventsBySequence.clear();
+      this.snapshotsBySequence.clear();
+      this.rejectAllPending(new RoomInstanceChangedError(previousInstanceId, message.roomInstanceId));
+    }
+    this.applyBootstrapDescriptors(message);
+    this.connected = false;
     for (const listener of this.listeners) listener({ snapshot: message.snapshot });
+    this.resendPendingAfterConnected = !roomInstanceChanged;
+  }
+
+  private applyBootstrapDescriptors(message: JoinedMessage): void {
+    this.rulePack = message.rulePack;
+    this.snapshot = message.snapshot;
+    this.capabilities = Object.freeze({ ...message.capabilities });
+    this.seats = createOccupiedSeats(message);
+    const guestSeat = this.seats.find((seat) => seat.occupantId === this.actorId);
+    if (guestSeat === undefined) throw new Error("Joined actor does not occupy an authoritative seat");
+    this.guestSeat = guestSeat;
+    this.betSpots = buildSeatBetSpots(
+      `${message.rulePack.mainPayouts.tie} : 1`,
+      message.rulePack.variant === "standard",
+    );
+  }
+
+  private pausePendingTimeouts(): void {
+    for (const pending of this.pendingCommands.values()) {
+      if (pending.timeout !== null) clearTimeout(pending.timeout);
+      pending.timeout = null;
+    }
+  }
+
+  private resendPendingCommands(): void {
+    for (const [requestId, pending] of this.pendingCommands) {
+      this.startPendingTimeout(requestId, pending);
+      void this.connection.submitIntent(requestId, pending.intent).catch((cause) => {
+        if (this.connected) this.rejectPending(requestId, toError(cause, "Remote command resend failed"));
+      });
+    }
+  }
+
+  private startPendingTimeout(requestId: string, pending: PendingCommand): void {
+    if (pending.timeout !== null) clearTimeout(pending.timeout);
+    pending.timeout = setTimeout(() => {
+      this.pendingCommands.delete(requestId);
+      pending.timeout = null;
+      pending.reject(new Error(`Remote command timed out: ${requestId}`));
+    }, this.commandTimeoutMs);
   }
 
   private resolvePending(requestId: string, event: TableEvent): void {
     const pending = this.pendingCommands.get(requestId);
     if (pending === undefined) return;
     this.pendingCommands.delete(requestId);
-    clearTimeout(pending.timeout);
+    if (pending.timeout !== null) clearTimeout(pending.timeout);
     pending.resolve(event);
   }
 
@@ -332,7 +413,7 @@ export class RemoteTableSession implements TableSession {
     const pending = this.pendingCommands.get(requestId);
     if (pending === undefined) return;
     this.pendingCommands.delete(requestId);
-    clearTimeout(pending.timeout);
+    if (pending.timeout !== null) clearTimeout(pending.timeout);
     pending.reject(error);
   }
 
@@ -348,6 +429,22 @@ function createUniqueRequestId(): string {
     return globalThis.crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function createOccupiedSeats(message: JoinedMessage): readonly SessionSeat[] {
+  return message.seats
+    .filter((seat): seat is typeof seat & { occupantId: NonNullable<typeof seat.occupantId> } =>
+      seat.occupantId !== null)
+    .map((seat) => Object.freeze({
+      label: seat.label,
+      seatId: seat.seatId,
+      occupantId: seat.occupantId,
+    }));
+}
+
+function readJoinErrorCode(error: Error | null): string | null {
+  if (error?.name !== "JoinRejectedError" || !("code" in error)) return null;
+  return typeof error.code === "string" ? error.code : null;
 }
 
 function trimOldestEntries<TKey, TValue>(map: Map<TKey, TValue>, maximumSize: number): void {

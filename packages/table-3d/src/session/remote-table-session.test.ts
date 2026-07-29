@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { asActorId, asRoundId, asSeatId, asTableId, type TableEvent, type TableSnapshot } from "@mct/shared";
 import { ROOM_PROTOCOL_VERSION, type JoinedMessage, type ServerMessage } from "@mct/room-protocol";
 import type { RoomConnectionStateSnapshot } from "@mct/room-client";
@@ -24,6 +24,7 @@ const snapshot = {
 } as TableSnapshot;
 const joined: JoinedMessage = {
   type: "joined",
+  roomInstanceId: "instance-1",
   tableId: snapshot.tableId,
   actorId,
   protocolVersion: ROOM_PROTOCOL_VERSION,
@@ -148,14 +149,14 @@ describe("RemoteTableSession", () => {
     expect(sent.requestId).toBeTruthy();
     expect(sent.intent).toMatchObject({ actorId, seatId });
     const event = createAcceptedEvent(2);
-    connection.emitMessage({ type: "intent_result", requestId: sent.requestId, event });
+    connection.emitMessage({ type: "intent_result", roomInstanceId: joined.roomInstanceId, requestId: sent.requestId, event });
 
     await expect(command).resolves.toEqual(event);
     session.dispose();
     expect(connection.closed).toBe(true);
   });
 
-  it("pairs out-of-order event and snapshot once and rejects pending on disconnect", async () => {
+  it("pairs out-of-order event and snapshot once", async () => {
     const connection = new FakeConnection();
     const session = await RemoteTableSession.create({ connection, commandTimeoutMs: 1_000 });
     const updates: number[] = [];
@@ -163,21 +164,76 @@ describe("RemoteTableSession", () => {
     const event = createAcceptedEvent(2);
     const nextSnapshot = { ...snapshot, lastEventSeq: 2 };
 
-    connection.emitMessage({ type: "snapshot", snapshot: nextSnapshot });
-    connection.emitMessage({ type: "event", event });
-    connection.emitMessage({ type: "event", event });
+    connection.emitMessage({ type: "snapshot", roomInstanceId: joined.roomInstanceId, snapshot: nextSnapshot });
+    connection.emitMessage({ type: "event", roomInstanceId: joined.roomInstanceId, event });
+    connection.emitMessage({ type: "event", roomInstanceId: joined.roomInstanceId, event });
     expect(updates).toEqual([2]);
-
-    const pending = session.clearBets(7);
-    connection.emitState({
-      state: "disconnected",
-      lastMessageAt: null,
-      lastPongAt: null,
-      reconnectAttempt: 1,
-      lastError: new Error("lost"),
-    });
-    await expect(pending).rejects.toThrow(/disconnected/i);
     expect(session.getSnapshot()).toEqual(nextSnapshot);
+  });
+
+  it("pauses and resends a pending command with the same request id after same-instance rejoin", async () => {
+    const connection = new FakeConnection();
+    const session = await RemoteTableSession.create({ connection, commandTimeoutMs: 20 });
+    const pending = session.placeBet(7, "player", 100);
+    const originalRequest = connection.sent[0]!;
+
+    connection.emitState({ state: "reconnecting", lastMessageAt: null, lastPongAt: null, reconnectAttempt: 1, lastError: new Error("lost") });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    connection.emitMessage({ ...joined, snapshot: { ...snapshot, lastEventSeq: 2 } });
+    connection.emitState({ state: "connected", lastMessageAt: null, lastPongAt: null, reconnectAttempt: 0, lastError: null });
+
+    expect(connection.sent).toHaveLength(2);
+    expect(connection.sent[1]).toEqual(originalRequest);
+    const event = createAcceptedEvent(2);
+    connection.emitMessage({ type: "intent_result", roomInstanceId: joined.roomInstanceId, requestId: originalRequest.requestId, event });
+    await expect(pending).resolves.toEqual(event);
+  });
+
+  it("fully resets on a new room instance and rejects old pending commands", async () => {
+    const connection = new FakeConnection();
+    const session = await RemoteTableSession.create({ connection });
+    const pending = session.placeBet(7, "player", 100);
+    connection.emitState({ state: "reconnecting", lastMessageAt: null, lastPongAt: null, reconnectAttempt: 1, lastError: new Error("lost") });
+    const replacementSeatId = asSeatId("replacement-seat");
+    const replacement = {
+      ...joined,
+      roomInstanceId: "instance-2",
+      snapshot: { ...snapshot, lastEventSeq: 0, seats: [{ seatId: replacementSeatId, occupantId: actorId, stack: 500 }] },
+      rulePack: { ...joined.rulePack, id: "replacement-pack", displayName: "Replacement pack" },
+      seats: [{ seatId: replacementSeatId, label: 3, occupantId: actorId }],
+    } satisfies JoinedMessage;
+
+    connection.emitMessage(replacement);
+
+    await expect(pending).rejects.toMatchObject({ name: "RoomInstanceChangedError" });
+    expect(session.getRulePack().id).toBe("replacement-pack");
+    expect(session.getSeats()).toEqual([{ seatId: replacementSeatId, label: 3, occupantId: actorId }]);
+    expect(session.getSnapshot().lastEventSeq).toBe(0);
+    expect(connection.sent).toHaveLength(1);
+  });
+
+  it("rejects new commands while disconnected and ignores stale-instance updates", async () => {
+    const connection = new FakeConnection();
+    const session = await RemoteTableSession.create({ connection });
+    connection.emitState({ state: "disconnected", lastMessageAt: null, lastPongAt: null, reconnectAttempt: 1, lastError: new Error("lost") });
+
+    await expect(session.placeBet(7, "player", 100)).rejects.toThrow(/disconnected/i);
+    const reportSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    connection.emitMessage({ type: "snapshot", roomInstanceId: "stale-instance", snapshot: { ...snapshot, lastEventSeq: 99 } });
+
+    expect(session.getSnapshot()).toEqual(snapshot);
+    expect(connection.sent).toHaveLength(0);
+    expect(reportSpy).toHaveBeenCalledWith(expect.stringContaining("stale room instance"));
+    reportSpy.mockRestore();
+  });
+
+  it("keeps same-instance sequence monotonic after rejoin", async () => {
+    const connection = new FakeConnection();
+    const session = await RemoteTableSession.create({ connection });
+
+    connection.emitMessage({ ...joined, snapshot: { ...snapshot, lastEventSeq: 0 } });
+
+    expect(session.getSnapshot()).toEqual(snapshot);
   });
 
   it("rejects a command when its correlated engine event is rejected", async () => {
@@ -191,7 +247,7 @@ describe("RemoteTableSession", () => {
       rejectReason: "wrong_phase" as const,
     };
 
-    connection.emitMessage({ type: "intent_result", requestId, event: rejectedEvent });
+    connection.emitMessage({ type: "intent_result", roomInstanceId: joined.roomInstanceId, requestId, event: rejectedEvent });
 
     await expect(pending).rejects.toThrow("wrong_phase");
   });

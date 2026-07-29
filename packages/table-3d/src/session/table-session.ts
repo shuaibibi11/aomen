@@ -63,6 +63,7 @@ export interface TableSessionNotifier {
   subscribe(listener: TableSessionListener): TableSessionUnsubscribe;
   publish(event: TableEvent): void;
   publishSnapshot(snapshot: TableSnapshot): void;
+  resetWithSnapshot(snapshot: TableSnapshot): void;
   dispose(): void;
 }
 
@@ -102,6 +103,15 @@ export function createTableSessionNotifier(
     },
     publishSnapshot(snapshot) {
       if (disposed || snapshot.lastEventSeq <= lastPublishedSequence) {
+        return;
+      }
+      lastPublishedSequence = snapshot.lastEventSeq;
+      for (const listener of listeners) {
+        listener({ snapshot });
+      }
+    },
+    resetWithSnapshot(snapshot) {
+      if (disposed) {
         return;
       }
       lastPublishedSequence = snapshot.lastEventSeq;

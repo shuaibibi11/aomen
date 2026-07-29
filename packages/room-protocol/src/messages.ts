@@ -29,7 +29,10 @@ import type { RulePack } from "@mct/rule-packs/schema";
 import { validateRulePack } from "@mct/rule-packs/validate";
 
 /** Protocol version, bumped when a breaking change lands on the wire. */
-export const ROOM_PROTOCOL_VERSION = 3;
+export const ROOM_PROTOCOL_VERSION = 4;
+
+/** Opaque identity of one live incarnation of a logical room. */
+export type RoomInstanceId = string;
 
 // --- Client → Server ---------------------------------------------------------
 
@@ -197,6 +200,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
 /** Confirms a join and hands over the current snapshot. */
 export interface JoinedMessage {
   readonly type: "joined";
+  readonly roomInstanceId: RoomInstanceId;
   readonly tableId: TableId;
   readonly actorId: ActorId;
   readonly protocolVersion: number;
@@ -222,17 +226,20 @@ export interface RoomSeatDescriptor {
 /** A full table snapshot, broadcast after state changes. */
 export interface SnapshotMessage {
   readonly type: "snapshot";
+  readonly roomInstanceId: RoomInstanceId;
   readonly snapshot: TableSnapshot;
 }
 
 /** One appended table event, broadcast as it happens. */
 export interface EventMessage {
   readonly type: "event";
+  readonly roomInstanceId: RoomInstanceId;
   readonly event: TableEvent;
 }
 
 export interface IntentResultMessage {
   readonly type: "intent_result";
+  readonly roomInstanceId: RoomInstanceId;
   readonly requestId: string;
   readonly event: TableEvent;
 }
@@ -519,6 +526,7 @@ export function parseServerMessage(value: unknown): ServerMessage {
       return {
         ...message,
         type,
+        roomInstanceId: requireServerString(message.roomInstanceId, "message.roomInstanceId"),
         tableId: asTableId(requireServerString(message.tableId, "message.tableId")),
         actorId: asActorId(requireServerString(message.actorId, "message.actorId")),
         protocolVersion: requireNonNegativeInteger(message.protocolVersion, "message.protocolVersion"),
@@ -531,14 +539,21 @@ export function parseServerMessage(value: unknown): ServerMessage {
       return {
         ...message,
         type,
+        roomInstanceId: requireServerString(message.roomInstanceId, "message.roomInstanceId"),
         snapshot: parseTableSnapshot(message.snapshot, "message.snapshot"),
       } as SnapshotMessage;
     case "event":
-      return { ...message, type, event: parseTableEvent(message.event) } as EventMessage;
+      return {
+        ...message,
+        type,
+        roomInstanceId: requireServerString(message.roomInstanceId, "message.roomInstanceId"),
+        event: parseTableEvent(message.event),
+      } as EventMessage;
     case "intent_result":
       return {
         ...message,
         type,
+        roomInstanceId: requireServerString(message.roomInstanceId, "message.roomInstanceId"),
         requestId: requireServerString(message.requestId, "message.requestId"),
         event: parseTableEvent(message.event),
       } as IntentResultMessage;

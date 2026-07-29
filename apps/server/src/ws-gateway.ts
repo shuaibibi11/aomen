@@ -16,6 +16,7 @@ import {
   parseClientMessage,
   type ClientMessage,
   type IntentResultMessage,
+  type RoomInstanceId,
   type RoomErrorCode,
   type ServerMessage,
 } from "@mct/room-protocol";
@@ -38,6 +39,7 @@ export interface WsGatewayOptions {
 interface SocketContext {
   readonly tableId: TableId;
   readonly actorId: ActorId;
+  readonly roomInstanceId: RoomInstanceId;
 }
 
 const MAXIMUM_REQUEST_RESULTS_PER_ACTOR = 1024;
@@ -87,7 +89,7 @@ export class WsGateway {
   private readonly socketContexts = new Map<WebSocket, SocketContext>();
   /** FIFO request results, scoped by authoritative table and actor identity. */
   private readonly requestResults = new Map<
-    TableId,
+    RoomInstanceId,
     Map<ActorId, Map<string, CachedIntentResult>>
   >();
   private readonly roomSubscriptions = new Map<
@@ -312,13 +314,15 @@ export class WsGateway {
     // Multiple sockets may bind to the same authorized human actor to support
     // multiple tabs and reconnect overlap. Each remains bound to that actor.
     const previousContext = this.socketContexts.get(socket);
-    this.socketContexts.set(socket, { tableId, actorId });
+    const roomInstanceId = room.getRoomInstanceId();
+    this.socketContexts.set(socket, { tableId, actorId, roomInstanceId });
     this.ensureRoomSubscription(tableId);
     if (previousContext !== undefined && previousContext.tableId !== tableId) {
       this.removeUnusedRoomSubscription(previousContext.tableId);
     }
     this.send(socket, {
       type: "joined",
+      roomInstanceId,
       tableId,
       actorId,
       protocolVersion: ROOM_PROTOCOL_VERSION,
@@ -346,7 +350,7 @@ export class WsGateway {
     }
     const intentFingerprint = createCanonicalFingerprint(message.intent);
     const actorRequestResults = this.getActorRequestResults(
-      context.tableId,
+      context.roomInstanceId,
       context.actorId,
     );
     const cachedRequest = actorRequestResults.get(requestId);
@@ -396,7 +400,12 @@ export class WsGateway {
 
     try {
       const event = room.submitIntent(message.intent);
-      const result: IntentResultMessage = { type: "intent_result", requestId, event };
+      const result: IntentResultMessage = {
+        type: "intent_result",
+        roomInstanceId: room.getRoomInstanceId(),
+        requestId,
+        event,
+      };
       actorRequestResults.set(requestId, { intentFingerprint, result });
       if (actorRequestResults.size > MAXIMUM_REQUEST_RESULTS_PER_ACTOR) {
         const oldestRequestId = actorRequestResults.keys().next().value as
@@ -419,18 +428,18 @@ export class WsGateway {
   }
 
   private getActorRequestResults(
-    tableId: TableId,
+    roomInstanceId: RoomInstanceId,
     actorId: ActorId,
   ): Map<string, CachedIntentResult> {
-    let tableRequestResults = this.requestResults.get(tableId);
-    if (tableRequestResults === undefined) {
-      tableRequestResults = new Map();
-      this.requestResults.set(tableId, tableRequestResults);
+    let roomRequestResults = this.requestResults.get(roomInstanceId);
+    if (roomRequestResults === undefined) {
+      roomRequestResults = new Map();
+      this.requestResults.set(roomInstanceId, roomRequestResults);
     }
-    let actorRequestResults = tableRequestResults.get(actorId);
+    let actorRequestResults = roomRequestResults.get(actorId);
     if (actorRequestResults === undefined) {
       actorRequestResults = new Map();
-      tableRequestResults.set(actorId, actorRequestResults);
+      roomRequestResults.set(actorId, actorRequestResults);
     }
     return actorRequestResults;
   }
@@ -465,8 +474,10 @@ export class WsGateway {
   }
 
   private broadcastRoomUpdate(tableId: TableId, update: RoomUpdate): void {
-    this.broadcast(tableId, { type: "event", event: update.event });
-    this.broadcast(tableId, { type: "snapshot", snapshot: update.snapshot });
+    const roomInstanceId = this.roomManager.getRoom(tableId)?.getRoomInstanceId();
+    if (roomInstanceId === undefined) return;
+    this.broadcast(tableId, { type: "event", roomInstanceId, event: update.event });
+    this.broadcast(tableId, { type: "snapshot", roomInstanceId, snapshot: update.snapshot });
   }
 
   /** Send a message to every socket joined to a table. */

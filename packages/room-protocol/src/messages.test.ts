@@ -109,8 +109,8 @@ describe("client message parsing", () => {
     });
   });
 
-  it("uses protocol version 3 for correlated authoritative sessions", () => {
-    expect(ROOM_PROTOCOL_VERSION).toBe(3);
+  it("uses protocol version 4 for room incarnation recovery", () => {
+    expect(ROOM_PROTOCOL_VERSION).toBe(4);
   });
 });
 
@@ -144,6 +144,7 @@ describe("server message parsing", () => {
   it.each([
     {
       type: "joined",
+      roomInstanceId: "room-instance-1",
       tableId: "table-1",
       actorId: "human-1",
       protocolVersion: ROOM_PROTOCOL_VERSION,
@@ -152,9 +153,9 @@ describe("server message parsing", () => {
       seats: validSeats,
       capabilities: validCapabilities,
     },
-    { type: "snapshot", snapshot: validSnapshot },
-    { type: "event", event: validEvent },
-    { type: "intent_result", requestId: "request-1", event: validEvent },
+    { type: "snapshot", roomInstanceId: "room-instance-1", snapshot: validSnapshot },
+    { type: "event", roomInstanceId: "room-instance-1", event: validEvent },
+    { type: "intent_result", roomInstanceId: "room-instance-1", requestId: "request-1", event: validEvent },
     { type: "error", code: "room_unavailable", message: "try later", requestId: "request-1" },
     { type: "pong", nonce: 7 },
   ])("parses supported server message $type", (message) => {
@@ -166,6 +167,9 @@ describe("server message parsing", () => {
     [],
     {},
     { type: "unknown" },
+    { type: "snapshot", roomInstanceId: "", snapshot: validSnapshot },
+    { type: "event", event: validEvent },
+    { type: "intent_result", requestId: "request-1", event: validEvent },
     { type: "joined", tableId: "", actorId: "human-1", protocolVersion: 2, snapshot: validSnapshot },
     { type: "joined", tableId: "table-1", actorId: "", protocolVersion: 2, snapshot: validSnapshot },
     { type: "joined", tableId: "table-1", actorId: "human-1", protocolVersion: "2", snapshot: validSnapshot },
@@ -199,6 +203,7 @@ describe("server message parsing", () => {
   it("retains unknown top-level and payload fields for forward compatibility", () => {
     const parsed = parseServerMessage({
       type: "joined",
+      roomInstanceId: "room-instance-1",
       tableId: "table-1",
       actorId: "human-1",
       protocolVersion: ROOM_PROTOCOL_VERSION,

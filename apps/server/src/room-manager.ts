@@ -23,7 +23,7 @@ import {
   type TableSnapshot,
 } from "@mct/shared";
 import type { RulePack } from "@mct/rule-packs";
-import type { RoomSessionCapabilities } from "@mct/room-protocol";
+import type { RoomInstanceId, RoomSessionCapabilities } from "@mct/room-protocol";
 import { TableRuntime, createShoe } from "@mct/table-engine";
 import { BasicPlayerAi } from "./ai/basic-player-ai.js";
 import type { EventStore } from "./memory-event-store.js";
@@ -54,6 +54,8 @@ export interface CreateRoomOptions {
   readonly shoeSeed: string;
   /** Buy-in granted to every seat at creation, in training chips. */
   readonly startingStack?: number;
+  /** Stable identity for this room incarnation; injectable for deterministic tests. */
+  readonly roomInstanceId?: RoomInstanceId;
 }
 
 interface SeatedAi {
@@ -95,6 +97,7 @@ export class RoomFaultedError extends Error {
  * a tick without waiting on a human.
  */
 export class Room {
+  private readonly roomInstanceId: RoomInstanceId;
   private readonly runtime: TableRuntime;
   private readonly rulePack: RulePack;
   private readonly seatDescriptors: readonly {
@@ -117,6 +120,11 @@ export class Room {
     store: EventStore,
     private readonly publishUpdate: RoomUpdateListener,
   ) {
+    const roomInstanceId = options.roomInstanceId ?? globalThis.crypto.randomUUID();
+    if (roomInstanceId.trim().length === 0) {
+      throw new Error("roomInstanceId must be a non-empty string");
+    }
+    this.roomInstanceId = roomInstanceId;
     this.store = store;
     this.rulePack = options.rulePack;
     this.humanActorId = options.humanActorId;
@@ -248,6 +256,10 @@ export class Room {
 
   getSnapshot(): TableSnapshot {
     return this.runtime.getSnapshot();
+  }
+
+  getRoomInstanceId(): RoomInstanceId {
+    return this.roomInstanceId;
   }
 
   getRulePack(): RulePack {

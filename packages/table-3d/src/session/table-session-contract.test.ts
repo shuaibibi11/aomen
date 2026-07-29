@@ -140,4 +140,19 @@ describe("table session notifier", () => {
       snapshot: { lastEventSeq: 43 },
     });
   });
+
+  it("publishes an explicit reset snapshot even when its sequence is lower", () => {
+    const notifier = createTableSessionNotifier(
+      () => ({ lastEventSeq: 42 }) as TableSnapshot,
+    );
+    const listener = vi.fn();
+    notifier.subscribe(listener);
+    notifier.publishSnapshot({ lastEventSeq: 42 } as TableSnapshot);
+
+    notifier.resetWithSnapshot({ lastEventSeq: 1 } as TableSnapshot);
+    notifier.publishSnapshot({ lastEventSeq: 1 } as TableSnapshot);
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith({ snapshot: { lastEventSeq: 1 } });
+  });
 });
