@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-截至 2026-07-29，Phase 0-1 的 Task 1-11 已实现；本地仓库验收已实测通过，但仓库尚无 CI。后续 Socket + AI 切片也已合入本分支。当前可用能力包括：
+截至 2026-07-30，Phase 0-1 的 Task 1-11 已实现；本地仓库验收已实测通过，但仓库尚无 CI。后续 Socket + AI 切片也已合入本分支。当前可用能力包括：
 
 - 标准与免佣百家乐主流程、第三张规则、主注与对子边注赔付、种子牌靴和训练币账本；
 - 权威 `TableRuntime`、内存事件流、单真人参与者加基础 AI 的演示房间；
@@ -30,7 +30,7 @@ LLM 边界目前**没有接入任何具体供应商 SDK**。远端会话默认�
 
 ## 环境与安装
 
-- Node.js `>=20`（2026-07-29 本地实测使用 `v22.17.0`）
+- Node.js `>=20`（2026-07-30 本地实测使用 `v22.17.0`）
 - pnpm `10.29.3`（以根 `package.json#packageManager` 为准）
 
 ```powershell
@@ -105,20 +105,19 @@ pnpm --filter @mct/table-3d dev
 
 该对象必须在应用模块加载前写入。不要通过 URL/query string 传 credential；不要将 credential 打入日志，也不要写入 localStorage、sessionStorage、IndexedDB 或其他持久化存储。实现会忽略 URL 中的远端 endpoint、身份与 credential，避免不受信链接改变信任单元。
 
-## 本地实测矩阵（2026-07-29）
+## 本地实测矩阵（2026-07-30）
 
-以下结果来自 [2026-07-29 本地验收记录](docs/development/validation-2026-07-29.md)，不是 CI 结果。
+以下结果来自 [2026-07-30 本地验收记录](docs/development/validation-2026-07-29.md)，不是 CI 结果。
 
 | 范围 | 结果 |
 | --- | ---: |
-| 全仓 `pnpm test` | 35 files / 536 tests passed |
-| `@mct/server` | 11 files / 144 tests passed |
-| `@mct/table-3d` | 14 files / 177 tests passed |
+| 全仓 `pnpm test` | 35 files / 538 tests passed |
+| `@mct/server` | 11 files / 142 tests passed |
+| `@mct/table-3d` | 14 files / 181 tests passed |
 | `@mct/room-client` | 1 file / 45 tests passed |
 | `@mct/room-protocol` | 1 file / 67 tests passed |
 | `pnpm typecheck` | 7 workspace projects passed |
 | `pnpm build` | 7 workspace projects passed |
-| Server start smoke | 临时 credential + 随机端口通过，进程和端口已清理 |
 | Local table E2E | `verify-click-to-bet` 与 `verify-felt-mapping` 通过 |
 
 ## 已知限制
@@ -127,7 +126,7 @@ pnpm --filter @mct/table-3d dev
 - 演示房间仅支持一个 human actor，不是生产多人账号/席位系统。
 - Basic AI 已工作；LLM 仅有 provider-neutral 接口、校验、超时和回退，未接具体 provider SDK。
 - 尚无生产级认证、授权、用户目录、secret 管理或教练后台服务。
-- table-3d 生产 bundle 当前约 751 kB（gzip 约 196 kB），Vite 会报告 chunk 大于 500 kB 的 warning；后续需 code splitting/manual chunks。
+- table-3d 生产 bundle 当前为 751.74 kB（gzip 196.47 kB），Vite 会报告 chunk 大于 500 kB 的 warning；后续需 code splitting/manual chunks。
 - L1-L3 教学、教练、成绩单、真实多赌场批量规则包、语音和真钱相关能力均不在当前完成范围。
 
 ## 文档
@@ -136,5 +135,5 @@ pnpm --filter @mct/table-3d dev
 - [UI/场景设计规格](docs/superpowers/specs/2026-07-27-macau-casino-ui-scene-design-spec.md)
 - [Phase 0-1 实现计划](docs/superpowers/plans/2026-07-27-macau-casino-training-phase0-1.md)
 - [当前进度与提交基线](docs/development/current-progress.md)
-- [2026-07-29 本地验收记录（非 CI）](docs/development/validation-2026-07-29.md)
+- [2026-07-30 本地验收记录（非 CI）](docs/development/validation-2026-07-29.md)
 - [Git 与外部 worktree 工作流](docs/development/git-workflow.md)
