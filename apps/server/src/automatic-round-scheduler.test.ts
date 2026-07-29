@@ -81,7 +81,7 @@ describe("AutomaticRoundScheduler", () => {
     expect(room.getSnapshot().phase).toBe("round_betting");
   });
 
-  it("places AI bets and closes betting only when the window expires", async () => {
+  it("places fast AI bets during the window and closes betting when it expires", async () => {
     const { room, store, tableId } = createRealRoom();
     const scheduler = new AutomaticRoundScheduler(room, TIMING);
     scheduler.start();
@@ -90,6 +90,12 @@ describe("AutomaticRoundScheduler", () => {
       store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
     ).toHaveLength(0);
 
+    await advance(0);
+
+    expect(
+      store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
+    ).toHaveLength(2);
+
     await advance(TIMING.bettingWindowMs);
 
     expect(room.getSnapshot().phase).toBe("no_more_bets");
@@ -97,6 +103,89 @@ describe("AutomaticRoundScheduler", () => {
       store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
     ).toHaveLength(2);
     expect(store.listByTable(tableId).at(-1)?.intent?.type).toBe("no_more_bets");
+  });
+
+  it("closes betting at the deadline without awaiting pending AI", async () => {
+    let resolveAiBets!: () => void;
+    const aiBets = new Promise<void>((resolve) => {
+      resolveAiBets = resolve;
+    });
+    let phase = "idle" as ReturnType<AutomaticRoundRoom["getAutomaticRoundPhase"]>;
+    const room: AutomaticRoundRoom = {
+      startAutomaticRound: vi.fn(() => {
+        phase = "round_betting";
+      }),
+      placeAutomaticPlayerBets: vi.fn(() => aiBets),
+      closeAutomaticBetting: vi.fn(() => {
+        phase = "no_more_bets";
+      }),
+      dealNextAutomaticCard: vi.fn(),
+      settleAutomaticRound: vi.fn(),
+      getAutomaticRoundPhase: vi.fn(() => phase),
+      isFaulted: vi.fn(() => false),
+    };
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+
+    scheduler.start();
+    expect(room.placeAutomaticPlayerBets).toHaveBeenCalledOnce();
+    await advance(TIMING.bettingWindowMs);
+
+    expect(room.closeAutomaticBetting).toHaveBeenCalledOnce();
+    expect(phase).toBe("no_more_bets");
+
+    resolveAiBets();
+    await Promise.resolve();
+    expect(room.closeAutomaticBetting).toHaveBeenCalledOnce();
+  });
+
+  it("rejects human bets and ignores a pending AI result after the deadline", async () => {
+    const { humanActorId, room, store, tableId } = createRealRoom();
+    let resolveAiBet!: (bet: unknown) => void;
+    const firstAiSeat = (
+      room as unknown as {
+        aiSeats: Array<{
+          ai: {
+            decideBet: () => unknown;
+          };
+        }>;
+      }
+    ).aiSeats[0];
+    if (firstAiSeat === undefined) {
+      throw new Error("Expected a seated AI for the deadline test");
+    }
+    const originalDecision = firstAiSeat.ai.decideBet();
+    firstAiSeat.ai.decideBet = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveAiBet = resolve;
+        }),
+    );
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+
+    scheduler.start();
+    await advance(TIMING.bettingWindowMs);
+
+    expect(room.getSnapshot().phase).toBe("no_more_bets");
+    const lateHumanBet = room.submitIntent({
+      type: "place_bet",
+      actorId: humanActorId,
+      seatId: room.getHumanSeatId(),
+      betKind: "player",
+      amount: 100,
+    });
+    expect(lateHumanBet.accepted).toBe(false);
+
+    resolveAiBet(originalDecision);
+    await advance(0);
+    expect(
+      store
+        .listByTable(tableId)
+        .filter(
+          (event) =>
+            event.intent?.type === "place_bet" &&
+            event.intent.actorId !== humanActorId,
+        ),
+    ).toHaveLength(0);
   });
 
   it("deals at most one card for each card interval and reaches round_end", async () => {
@@ -185,7 +274,7 @@ describe("AutomaticRoundScheduler", () => {
     await advance(TIMING.bettingWindowMs);
 
     expect(scheduler.isRunning()).toBe(false);
-    expect(room.placeAutomaticPlayerBets).not.toHaveBeenCalled();
+    expect(room.placeAutomaticPlayerBets).toHaveBeenCalledOnce();
   });
 
   it("reports an action failure once and stops", async () => {
@@ -205,7 +294,7 @@ describe("AutomaticRoundScheduler", () => {
     const scheduler = new AutomaticRoundScheduler(room, TIMING, { onError });
 
     scheduler.start();
-    await advance(TIMING.bettingWindowMs);
+    await Promise.resolve();
     await advance(100_000);
 
     expect(onError).toHaveBeenCalledOnce();
@@ -216,12 +305,16 @@ describe("AutomaticRoundScheduler", () => {
 
   it("does not continue after stop while asynchronous AI betting is pending", async () => {
     let resolveAiBets!: () => void;
+    let aiTaskSignal: AbortSignal | undefined;
     const aiBets = new Promise<void>((resolve) => {
       resolveAiBets = resolve;
     });
     const room: AutomaticRoundRoom = {
       startAutomaticRound: vi.fn(),
-      placeAutomaticPlayerBets: vi.fn(() => aiBets),
+      placeAutomaticPlayerBets: vi.fn((signal) => {
+        aiTaskSignal = signal;
+        return aiBets;
+      }),
       closeAutomaticBetting: vi.fn(),
       dealNextAutomaticCard: vi.fn(),
       settleAutomaticRound: vi.fn(),
@@ -231,13 +324,47 @@ describe("AutomaticRoundScheduler", () => {
     const scheduler = new AutomaticRoundScheduler(room, TIMING);
 
     scheduler.start();
-    await advance(TIMING.bettingWindowMs);
+    expect(room.placeAutomaticPlayerBets).toHaveBeenCalledOnce();
     scheduler.stop();
+    expect(aiTaskSignal?.aborted).toBe(true);
     resolveAiBets();
     await Promise.resolve();
 
     expect(room.closeAutomaticBetting).not.toHaveBeenCalled();
     expect(room.dealNextAutomaticCard).not.toHaveBeenCalled();
+  });
+
+  it("ignores an old AI rejection after stop and restart", async () => {
+    let rejectOldAiBets!: (error: Error) => void;
+    const oldAiBets = new Promise<void>((_resolve, reject) => {
+      rejectOldAiBets = reject;
+    });
+    const onError = vi.fn();
+    let aiAttempt = 0;
+    const room: AutomaticRoundRoom = {
+      startAutomaticRound: vi.fn(),
+      placeAutomaticPlayerBets: vi.fn(() => {
+        aiAttempt += 1;
+        return aiAttempt === 1 ? oldAiBets : Promise.resolve();
+      }),
+      closeAutomaticBetting: vi.fn(),
+      dealNextAutomaticCard: vi.fn(),
+      settleAutomaticRound: vi.fn(),
+      getAutomaticRoundPhase: vi.fn(() => "round_betting"),
+      isFaulted: vi.fn(() => false),
+    };
+    const scheduler = new AutomaticRoundScheduler(room, TIMING, { onError });
+
+    scheduler.start();
+    scheduler.stop();
+    scheduler.start();
+    rejectOldAiBets(new Error("stale AI failure"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(scheduler.isRunning()).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+    expect(room.placeAutomaticPlayerBets).toHaveBeenCalledTimes(2);
   });
 
   it.each([

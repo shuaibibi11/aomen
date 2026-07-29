@@ -9,7 +9,7 @@ export interface AutomaticRoundTiming {
 
 export interface AutomaticRoundRoom {
   startAutomaticRound(): void;
-  placeAutomaticPlayerBets(): void | Promise<void>;
+  placeAutomaticPlayerBets(signal: AbortSignal): void | Promise<void>;
   closeAutomaticBetting(): void;
   dealNextAutomaticCard(): void;
   settleAutomaticRound(): void;
@@ -49,6 +49,7 @@ export class AutomaticRoundScheduler {
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private runGeneration = 0;
+  private aiTaskController: AbortController | null = null;
   private readonly onError: (error: unknown) => void;
 
   constructor(
@@ -71,13 +72,15 @@ export class AutomaticRoundScheduler {
     try {
       this.beginRound(generation);
     } catch (error) {
-      this.fail(error);
+      this.fail(error, generation);
     }
   }
 
   stop(): void {
     this.running = false;
     this.runGeneration += 1;
+    this.aiTaskController?.abort();
+    this.aiTaskController = null;
     if (this.pendingTimer !== null) {
       clearTimeout(this.pendingTimer);
       this.pendingTimer = null;
@@ -109,17 +112,51 @@ export class AutomaticRoundScheduler {
       return;
     }
     this.room.startAutomaticRound();
+    this.aiTaskController?.abort();
+    const aiTaskController = new AbortController();
+    this.aiTaskController = aiTaskController;
+    this.startAiBetting(generation, aiTaskController);
     this.schedule(this.timing.bettingWindowMs, generation, () =>
       this.finishBetting(generation),
     );
   }
 
-  private async finishBetting(generation: number): Promise<void> {
-    await this.room.placeAutomaticPlayerBets();
+  private startAiBetting(
+    generation: number,
+    aiTaskController: AbortController,
+  ): void {
+    if (!this.assertActive(generation)) {
+      return;
+    }
+
+    try {
+      Promise.resolve(this.room.placeAutomaticPlayerBets(aiTaskController.signal)).catch(
+        (error: unknown) => {
+          if (
+            this.aiTaskController === aiTaskController &&
+            !aiTaskController.signal.aborted
+          ) {
+            this.fail(error, generation);
+          }
+        },
+      );
+    } catch (error) {
+      if (
+        this.aiTaskController === aiTaskController &&
+        !aiTaskController.signal.aborted
+      ) {
+        this.fail(error, generation);
+      }
+    }
+  }
+
+  private finishBetting(generation: number): void {
     if (!this.assertActive(generation)) {
       return;
     }
     this.room.closeAutomaticBetting();
+    this.aiTaskController?.abort();
+    this.aiTaskController = null;
     this.scheduleNextCard(generation);
   }
 
@@ -163,12 +200,12 @@ export class AutomaticRoundScheduler {
       }
       Promise.resolve()
         .then(action)
-        .catch((error: unknown) => this.fail(error));
+        .catch((error: unknown) => this.fail(error, generation));
     }, delayMilliseconds);
   }
 
-  private fail(error: unknown): void {
-    if (!this.running) {
+  private fail(error: unknown, generation: number): void {
+    if (!this.isActive(generation)) {
       return;
     }
     this.stop();

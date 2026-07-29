@@ -281,9 +281,16 @@ export class Room {
   }
 
   /** Ask each seated AI for its bet while betting remains open. */
-  placeAutomaticPlayerBets(): void | Promise<void> {
+  async placeAutomaticPlayerBets(signal: AbortSignal): Promise<void> {
     for (const seated of this.aiSeats) {
-      const bet = seated.ai.decideBet();
+      if (signal.aborted || this.runtime.getSnapshot().phase !== "round_betting") {
+        return;
+      }
+
+      const bet = await seated.ai.decideBet();
+      if (signal.aborted || this.runtime.getSnapshot().phase !== "round_betting") {
+        return;
+      }
       if (bet !== null) {
         this.applyAutomaticIntent(bet);
       }
@@ -319,9 +326,11 @@ export class Room {
    */
   playAutomaticRound(): void {
     this.startAutomaticRound();
-    const aiBetResult = this.placeAutomaticPlayerBets();
-    if (aiBetResult instanceof Promise) {
-      throw new Error("playAutomaticRound does not support asynchronous AI betting");
+    for (const seated of this.aiSeats) {
+      const bet = seated.ai.decideBet();
+      if (bet !== null) {
+        this.applyAutomaticIntent(bet);
+      }
     }
     this.closeAutomaticBetting();
 
