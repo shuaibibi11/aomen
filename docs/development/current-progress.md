@@ -5,9 +5,9 @@
 ## Git 基线
 
 - 稳定基线：`master` at `5299b17`（`feat(room-protocol): websocket message contracts`）。
-- 本次验收分支：`docs/socket-ai-workflow`；本地验收的 validated commit 为 `ca8bc64`。
+- 本次验收分支：`feature/recover-current-work`；最终加固后的 validated commit 为 `ffb79c4`。
 - Phase 0-1 实现从 `755dc9a`（monorepo）到 `5299b17`（room protocol）建立共享类型、规则包、引擎、账本和协议。
-- Socket + AI 后续切片位于 `a030268..dd90364`，均为 `5299b17` 之后的线性提交。
+- Socket + AI 后续切片位于 `a030268..ffb79c4`，均为 `5299b17` 之后的线性提交。
 
 ## Phase 0-1 Task 1-11
 
@@ -18,10 +18,10 @@
 | 3 Rule Pack | 完成 | `8a3c6f8`；schema、validator、示例包与测试存在 |
 | 4 补牌表 | 完成 | `d42a98a`；实现与 13 个当前测试存在 |
 | 5 种子 Shoe | 完成 | `549b6e8`；实现与 shoe/RNG 当前测试存在 |
-| 6 赔付 | 完成 | `e18cf46`；实现与 15 个当前测试存在 |
-| 7 Chip Ledger | 完成 | `fb5c6fb`；实现与 15 个当前测试存在 |
-| 8 TableRuntime | 完成 | `a4a5b83`；状态机与 14 个当前测试存在 |
-| 9 Room 协议 | 完成 | `5299b17`；协议契约与 60 个当前测试存在 |
+| 6 赔付 | 完成 | `e18cf46`, `d7abdb4`；实现与 19 个当前测试存在 |
+| 7 Chip Ledger | 完成 | `fb5c6fb`, `8386354`, `ffb79c4`；实现与 18 个当前测试存在 |
+| 8 TableRuntime | 完成 | `a4a5b83`, `d7abdb4..ffb79c4`；状态机与 26 个当前测试存在 |
+| 9 Room 协议 | 完成 | `5299b17..8386354`；v5 协议契约与 67 个当前测试存在 |
 | 10 最小 Server | 完成 | `98d5b74..fa579d8` 与 `47fce39..5922b38`；实现与当前测试存在 |
 | 11 仓库验收 | 实现完成，本地实测 | 根 README 与聚合 scripts 可直接核验；本地 gates、server smoke 与 table-3d E2E 见[验收记录](validation-2026-07-29.md)，不是 CI |
 
@@ -38,6 +38,7 @@
 | Resilient room client | 完成 | `5f7b4e5..5ff03f5` |
 | Remote authoritative session | 完成 | `f98acd9..1ecb8ae` |
 | Provider-neutral LLM AI boundary | 完成 | `3de3a73..dd90364` |
+| Authoritative bet and settlement hardening | 完成 | `d7abdb4..ffb79c4` |
 
 Basic AI 已经工作，会在下注阶段为 AI 席位产生合法决策。LLM 路径提供 provider-neutral 决策接口、输入/输出约束、超时、遥测清洗和 Basic AI fallback，但尚未集成 OpenAI、Anthropic 或其他供应商 SDK；不能把“边界已完成”表述为“供应商 LLM 已上线”。
 
@@ -50,13 +51,13 @@ Remote session 的协议、客户端和真实 WebSocket 集成测试已经覆盖
 | 命令/检查 | 本地实测结果 |
 | --- | --- |
 | `pnpm install --frozen-lockfile` | 成功；lockfile unchanged；pnpm 提示 esbuild build script 未批准 |
-| `pnpm build` | 成功；7/7 workspace projects；table-3d chunk 748.23 kB / gzip 195.71 kB warning |
-| `pnpm test` | 35 test files / 507 tests passed |
+| `pnpm build` | 成功；7/7 workspace projects；table-3d chunk 751.34 kB / gzip 196.47 kB warning |
+| `pnpm test` | 35 test files / 536 tests passed |
 | `pnpm typecheck` | 7/7 workspace projects passed |
-| `pnpm --filter @mct/server test` | 11 files / 142 tests passed |
-| `pnpm --filter @mct/table-3d test` | 14 files / 176 tests passed |
+| `pnpm --filter @mct/server test` | 11 files / 144 tests passed |
+| `pnpm --filter @mct/table-3d test` | 14 files / 177 tests passed |
 | `pnpm --filter @mct/room-client test` | 1 file / 45 tests passed |
-| `pnpm --filter @mct/room-protocol test` | 1 file / 60 tests passed |
+| `pnpm --filter @mct/room-protocol test` | 1 file / 67 tests passed |
 | Server start smoke | 临时 `DEMO_ROOM_CREDENTIAL` + 随机空闲端口成功，PID/端口已清理 |
 | `verify-click-to-bet.mjs` | 通过：点击、下注、锁筹、发牌、结算、渲染与拒绝路径 |
 | `verify-felt-mapping.mjs` | 通过：7 个座位区和 commission row 探针全部命中印刷区域 |

@@ -107,15 +107,15 @@ pnpm --filter @mct/table-3d dev
 
 ## 本地实测矩阵（2026-07-29）
 
-以下结果来自 [`ca8bc64` 本地验收记录](docs/development/validation-2026-07-29.md)，不是 CI 结果。
+以下结果来自 [2026-07-29 本地验收记录](docs/development/validation-2026-07-29.md)，不是 CI 结果。
 
 | 范围 | 结果 |
 | --- | ---: |
-| 全仓 `pnpm test` | 35 files / 507 tests passed |
-| `@mct/server` | 11 files / 142 tests passed |
-| `@mct/table-3d` | 14 files / 176 tests passed |
+| 全仓 `pnpm test` | 35 files / 536 tests passed |
+| `@mct/server` | 11 files / 144 tests passed |
+| `@mct/table-3d` | 14 files / 177 tests passed |
 | `@mct/room-client` | 1 file / 45 tests passed |
-| `@mct/room-protocol` | 1 file / 60 tests passed |
+| `@mct/room-protocol` | 1 file / 67 tests passed |
 | `pnpm typecheck` | 7 workspace projects passed |
 | `pnpm build` | 7 workspace projects passed |
 | Server start smoke | 临时 credential + 随机端口通过，进程和端口已清理 |
@@ -127,7 +127,7 @@ pnpm --filter @mct/table-3d dev
 - 演示房间仅支持一个 human actor，不是生产多人账号/席位系统。
 - Basic AI 已工作；LLM 仅有 provider-neutral 接口、校验、超时和回退，未接具体 provider SDK。
 - 尚无生产级认证、授权、用户目录、secret 管理或教练后台服务。
-- table-3d 生产 bundle 当前约 748 kB（gzip 约 196 kB），Vite 会报告 chunk 大于 500 kB 的 warning；后续需 code splitting/manual chunks。
+- table-3d 生产 bundle 当前约 751 kB（gzip 约 196 kB），Vite 会报告 chunk 大于 500 kB 的 warning；后续需 code splitting/manual chunks。
 - L1-L3 教学、教练、成绩单、真实多赌场批量规则包、语音和真钱相关能力均不在当前完成范围。
 
 ## 文档
