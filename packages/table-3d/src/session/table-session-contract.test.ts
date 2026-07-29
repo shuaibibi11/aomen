@@ -124,4 +124,20 @@ describe("table session notifier", () => {
     );
     expect(listener).not.toHaveBeenCalled();
   });
+
+  it("publishes a monotonic snapshot-only reconnect update", () => {
+    const notifier = createTableSessionNotifier(
+      () => ({ lastEventSeq: 42 }) as TableSnapshot,
+    );
+    const listener = vi.fn();
+    notifier.subscribe(listener);
+
+    notifier.publishSnapshot({ lastEventSeq: 43 } as TableSnapshot);
+    notifier.publishSnapshot({ lastEventSeq: 42 } as TableSnapshot);
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith({
+      snapshot: { lastEventSeq: 43 },
+    });
+  });
 });

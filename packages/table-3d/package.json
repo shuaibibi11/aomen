@@ -13,15 +13,20 @@
   },
   "dependencies": {
     "@mct/rule-packs": "workspace:*",
+    "@mct/room-client": "workspace:*",
+    "@mct/room-protocol": "workspace:*",
     "@mct/shared": "workspace:*",
     "@mct/table-engine": "workspace:*",
     "three": "0.185.1"
   },
   "devDependencies": {
+    "@mct/server": "workspace:*",
     "@types/three": "0.185.0",
+    "@types/ws": "8.5.13",
     "playwright": "^1.62.0",
     "typescript": "5.7.3",
     "vite": "6.0.7",
-    "vitest": "3.0.5"
+    "vitest": "3.0.5",
+    "ws": "8.18.0"
   }
 }

@@ -27,7 +27,7 @@ export interface SessionSeat {
 }
 
 export interface TableSessionUpdate {
-  readonly event: TableEvent;
+  readonly event?: TableEvent;
   readonly snapshot: TableSnapshot;
 }
 
@@ -60,6 +60,7 @@ export type TableSessionFactory = (
 export interface TableSessionNotifier {
   subscribe(listener: TableSessionListener): TableSessionUnsubscribe;
   publish(event: TableEvent): void;
+  publishSnapshot(snapshot: TableSnapshot): void;
   dispose(): void;
 }
 
@@ -95,6 +96,15 @@ export function createTableSessionNotifier(
       const update = { event, snapshot };
       for (const listener of listeners) {
         listener(update);
+      }
+    },
+    publishSnapshot(snapshot) {
+      if (disposed || snapshot.lastEventSeq <= lastPublishedSequence) {
+        return;
+      }
+      lastPublishedSequence = snapshot.lastEventSeq;
+      for (const listener of listeners) {
+        listener({ snapshot });
       }
     },
     dispose() {

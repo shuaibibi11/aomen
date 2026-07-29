@@ -25,7 +25,8 @@ import {
   asSeatId,
   asTableId,
 } from "@mct/shared";
-import { validateRulePack, type RulePack } from "@mct/rule-packs";
+import type { RulePack } from "@mct/rule-packs/schema";
+import { validateRulePack } from "@mct/rule-packs/validate";
 
 /** Protocol version, bumped when a breaking change lands on the wire. */
 export const ROOM_PROTOCOL_VERSION = 3;

@@ -1,4 +1,8 @@
 import { LocalTableSession } from "./local-table-session.js";
+import { RoomConnection } from "@mct/room-client";
+import { asActorId, asTableId } from "@mct/shared";
+import { RemoteTableSession } from "./remote-table-session.js";
+import type { SessionRuntimeConfig } from "./session-runtime-config.js";
 import type {
   TableSession,
   TableSessionFactory,
@@ -7,6 +11,27 @@ import type {
 
 export const createLocalTableSession: TableSessionFactory = async (options) =>
   new LocalTableSession(options);
+
+export function createConfiguredTableSessionFactory(
+  runtimeConfig: SessionRuntimeConfig,
+): TableSessionFactory {
+  if (runtimeConfig.runtime === "local") return createLocalTableSession;
+  return async () => RemoteTableSession.create({
+    connection: new RoomConnection({
+      url: runtimeConfig.wsUrl,
+      tableId: asTableId(runtimeConfig.tableId),
+      actorId: asActorId(runtimeConfig.actorId),
+      credential: runtimeConfig.credential,
+      connectTimeoutMs: 5_000,
+      joinTimeoutMs: 5_000,
+      heartbeatIntervalMs: 10_000,
+      pongTimeoutMs: 5_000,
+      reconnectBaseDelayMs: 500,
+      reconnectMaxDelayMs: 10_000,
+      reconnectJitterRatio: 0.2,
+    }),
+  });
+}
 
 /** Owns session replacement and rejects stale asynchronous factory results. */
 export class TableSessionController {

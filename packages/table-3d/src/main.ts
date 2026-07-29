@@ -19,6 +19,11 @@ import {
   findBetSpotAtWorldPosition,
   seatLocalToWorld,
 } from "./specs/table-layout.js";
+import { createConfiguredTableSessionFactory } from "./session/session-factory.js";
+import {
+  readSessionRuntimeConfig,
+  type RemoteSessionRuntimeConfig,
+} from "./session/session-runtime-config.js";
 
 function requireElement<T extends HTMLElement>(elementId: string): T {
   const element = document.getElementById(elementId);
@@ -61,7 +66,17 @@ function buildOptionGroup<TValue extends string>(
 
 function main(): void {
   const canvas = requireElement<HTMLCanvasElement>("viewport");
-  const previewApp = new PreviewApp(canvas);
+  const globalRuntimeConfig = (globalThis as typeof globalThis & {
+    __MCT_SESSION_CONFIG__?: Partial<RemoteSessionRuntimeConfig>;
+  }).__MCT_SESSION_CONFIG__;
+  const runtimeConfig = readSessionRuntimeConfig(
+    new URLSearchParams(globalThis.location.search),
+    globalRuntimeConfig,
+  );
+  const previewApp = new PreviewApp(
+    canvas,
+    createConfiguredTableSessionFactory(runtimeConfig),
+  );
 
   const modeOptions = (Object.keys(PREVIEW_MODE_LABELS) as PreviewMode[]).map(
     (mode) => ({ value: mode, label: PREVIEW_MODE_LABELS[mode] }),
