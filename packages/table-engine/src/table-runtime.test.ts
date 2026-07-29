@@ -18,6 +18,7 @@ import {
   type Card,
   type Rank,
   type Suit,
+  type TableIntent,
 } from "@mct/shared";
 import type { RulePack } from "@mct/rule-packs";
 import { TableRuntime } from "./table-runtime.js";
@@ -183,6 +184,27 @@ describe("TableRuntime naturals", () => {
 });
 
 describe("TableRuntime authorisation", () => {
+  it("rejects an unknown bet kind without locking chips or recording a bet", () => {
+    const runtime = makeRuntime({ cards: [c("9"), c("2"), c("K"), c("3")] });
+    runtime.submitIntent({ type: "buy_in", actorId: ALICE, seatId: SEAT_1, amount: 1000 });
+    runtime.submitIntent({ type: "start_round", actorId: DEALER });
+    const snapshotBefore = runtime.getSnapshot();
+    const untrustedIntent = {
+      type: "place_bet",
+      actorId: ALICE,
+      seatId: SEAT_1,
+      betKind: "dragon",
+      amount: 100,
+    } as unknown as TableIntent;
+
+    const rejected = runtime.submitIntent(untrustedIntent);
+
+    expect(rejected.accepted).toBe(false);
+    expect(rejected.rejectReason).toBe("unknown_bet_kind");
+    expect(runtime.getStack(SEAT_1)).toBe(1000);
+    expect(runtime.getSnapshot().bets).toEqual(snapshotBefore.bets);
+  });
+
   it("rejects a bet placed after betting is closed", () => {
     const runtime = makeRuntime({
       cards: [c("9"), c("2"), c("K"), c("3")],

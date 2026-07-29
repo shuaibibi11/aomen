@@ -36,6 +36,8 @@ export interface CreateRoomOptions {
   readonly rulePack: RulePack;
   /** The human guest's actor id; seated at the first seat. */
   readonly humanActorId: ActorId;
+  /** Credential required together with the human actor id when joining. */
+  readonly joinCredential: string;
   /** How many seats the table has in total. */
   readonly seatCount: number;
   /** How many of the seats (after the human) are filled by basic AI. */
@@ -88,6 +90,7 @@ export class Room {
   private readonly runtime: TableRuntime;
   private readonly humanSeatId: SeatId;
   private readonly humanActorId: ActorId;
+  private readonly joinCredential: string;
   private readonly allowedClientActorIds: ReadonlySet<ActorId>;
   private readonly aiSeats: readonly SeatedAi[];
   private readonly store: EventStore;
@@ -100,6 +103,7 @@ export class Room {
   ) {
     this.store = store;
     this.humanActorId = options.humanActorId;
+    this.joinCredential = options.joinCredential;
     this.allowedClientActorIds = new Set([options.humanActorId]);
 
     const seatIds = Array.from({ length: options.seatCount }, (_unused, index) =>
@@ -232,8 +236,12 @@ export class Room {
   }
 
   /** Whether an ordinary client socket may bind to this actor identity. */
-  isClientActorAllowed(actorId: ActorId): boolean {
-    return actorId === this.humanActorId && this.allowedClientActorIds.has(actorId);
+  canClientJoin(actorId: ActorId, credential: string): boolean {
+    return (
+      actorId === this.humanActorId &&
+      this.allowedClientActorIds.has(actorId) &&
+      credential === this.joinCredential
+    );
   }
 
   /**
@@ -244,7 +252,10 @@ export class Room {
    * and every AI seat remain server-controlled.
    */
   isClientIntentAllowed(intent: TableIntent): boolean {
-    if (!this.isClientActorAllowed(intent.actorId)) {
+    if (
+      intent.actorId !== this.humanActorId ||
+      !this.allowedClientActorIds.has(intent.actorId)
+    ) {
       return false;
     }
 
@@ -342,8 +353,12 @@ export class RoomManager {
   }
 
   /** Read-only join authorization used by transport gateways. */
-  isClientActorAllowed(tableId: TableId, actorId: ActorId): boolean {
-    return this.rooms.get(tableId)?.isClientActorAllowed(actorId) ?? false;
+  canClientJoin(
+    tableId: TableId,
+    actorId: ActorId,
+    credential: string,
+  ): boolean {
+    return this.rooms.get(tableId)?.canClientJoin(actorId, credential) ?? false;
   }
 
   /** Expose quarantine state for health checks and operational monitoring. */

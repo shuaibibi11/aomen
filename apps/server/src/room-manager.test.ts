@@ -38,6 +38,7 @@ function devPack(): RulePack {
 
 const TABLE_ID = asTableId("table-1");
 const HUMAN = asActorId("human-1");
+const JOIN_CREDENTIAL = "room-test-credential";
 
 function createRoom() {
   const store = new MemoryEventStore();
@@ -46,6 +47,7 @@ function createRoom() {
     tableId: TABLE_ID,
     rulePack: devPack(),
     humanActorId: HUMAN,
+    joinCredential: JOIN_CREDENTIAL,
     seatCount: 3,
     aiCount: 2,
     shoeSeed: "room-seed-1",
@@ -76,19 +78,20 @@ class FailingEventStore implements EventStore {
 }
 
 describe("RoomManager", () => {
-  it("allows only the room's human actor to join as a client", () => {
+  it("requires the configured human actor and credential together", () => {
     const { manager, room } = createRoom();
     const aiActorId = room
       .getSnapshot()
       .seats.map((seat) => seat.occupantId)
       .find((actorId) => actorId !== null && actorId !== HUMAN);
 
-    expect(room.isClientActorAllowed(HUMAN)).toBe(true);
-    expect(manager.isClientActorAllowed(TABLE_ID, HUMAN)).toBe(true);
-    expect(manager.isClientActorAllowed(TABLE_ID, asActorId("intruder"))).toBe(false);
+    expect(room.canClientJoin(HUMAN, JOIN_CREDENTIAL)).toBe(true);
+    expect(manager.canClientJoin(TABLE_ID, HUMAN, JOIN_CREDENTIAL)).toBe(true);
+    expect(room.canClientJoin(HUMAN, "wrong-credential")).toBe(false);
+    expect(room.canClientJoin(asActorId("intruder"), JOIN_CREDENTIAL)).toBe(false);
     expect(aiActorId).toBeDefined();
-    expect(room.isClientActorAllowed(aiActorId!)).toBe(false);
-    expect(room.isClientActorAllowed(SYSTEM_DEALER)).toBe(false);
+    expect(room.canClientJoin(aiActorId!, JOIN_CREDENTIAL)).toBe(false);
+    expect(room.canClientJoin(SYSTEM_DEALER, JOIN_CREDENTIAL)).toBe(false);
   });
 
   it("authorizes ordinary client intents only for the human actor and seat", () => {
@@ -147,6 +150,7 @@ describe("RoomManager", () => {
         tableId: TABLE_ID,
         rulePack: devPack(),
         humanActorId: asActorId("another-human"),
+        joinCredential: "another-credential",
         seatCount: 2,
         aiCount: 1,
         shoeSeed: "another-seed",
@@ -271,6 +275,7 @@ describe("RoomManager", () => {
       tableId: TABLE_ID,
       rulePack: devPack(),
       humanActorId: HUMAN,
+      joinCredential: JOIN_CREDENTIAL,
       seatCount: 2,
       aiCount: 1,
       shoeSeed: "fault-seed",

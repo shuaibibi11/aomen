@@ -15,6 +15,7 @@ import { RoomFaultedError, RoomManager } from "./room-manager.js";
 import { getIntentActorError, WsGateway } from "./ws-gateway.js";
 
 const openGateways: WsGateway[] = [];
+const JOIN_CREDENTIAL = "gateway-test-credential";
 
 afterEach(() => {
   for (const gateway of openGateways.splice(0)) {
@@ -70,6 +71,7 @@ async function createGateway(onError?: (error: unknown) => void) {
     tableId,
     rulePack: createRulePack(),
     humanActorId,
+    joinCredential: JOIN_CREDENTIAL,
     seatCount: 2,
     aiCount: 1,
     shoeSeed: "gateway-seed",
@@ -127,12 +129,13 @@ async function joinClient(
   socket: WebSocket,
   tableId: TableId,
   actorId: ReturnType<typeof asActorId>,
+  credential = JOIN_CREDENTIAL,
 ): Promise<ServerMessage> {
   const response = waitForMessage(
     socket,
     (message) => message.type === "joined" || message.type === "error",
   );
-  socket.send(JSON.stringify({ type: "join_room", tableId, actorId }));
+  socket.send(JSON.stringify({ type: "join_room", tableId, actorId, credential }));
   return response;
 }
 
@@ -168,6 +171,40 @@ describe("WebSocket actor binding", () => {
 });
 
 describe("WsGateway room delivery", () => {
+  it("rejects the correct actor with a wrong credential without leaking it", async () => {
+    const { humanActorId, room, store, tableId, url } = await createGateway();
+    const socket = await connectClient(url);
+    const snapshotBefore = room.getSnapshot();
+    const eventCountBefore = store.count();
+    const wrongCredential = "credential-that-must-not-leak";
+
+    const response = await joinClient(socket, tableId, humanActorId, wrongCredential);
+
+    expect(response).toMatchObject({ type: "error", code: "actor_not_allowed" });
+    expect(JSON.stringify(response)).not.toContain(wrongCredential);
+    expect(room.getSnapshot()).toEqual(snapshotBefore);
+    expect(store.count()).toBe(eventCountBefore);
+
+    const pongResponse = waitForMessage(socket, (message) => message.type === "pong");
+    socket.send(JSON.stringify({ type: "ping", nonce: 7 }));
+    expect(await pongResponse).toEqual({ type: "pong", nonce: 7 });
+    socket.close();
+  });
+
+  it("rejects a wrong actor with the correct credential", async () => {
+    const { room, store, tableId, url } = await createGateway();
+    const socket = await connectClient(url);
+    const snapshotBefore = room.getSnapshot();
+    const eventCountBefore = store.count();
+
+    const response = await joinClient(socket, tableId, asActorId("wrong-actor"));
+
+    expect(response).toMatchObject({ type: "error", code: "actor_not_allowed" });
+    expect(room.getSnapshot()).toEqual(snapshotBefore);
+    expect(store.count()).toBe(eventCountBefore);
+    socket.close();
+  });
+
   it("rejects arbitrary, AI, and system actor identities at join", async () => {
     const { room, tableId, url } = await createGateway();
     const aiActorId = room
@@ -202,6 +239,36 @@ describe("WsGateway room delivery", () => {
     expect(secondJoin).toMatchObject({ type: "joined", actorId: humanActorId });
     firstSocket.close();
     secondSocket.close();
+  });
+
+  it.each([
+    ["missing intent", { type: "submit_intent" }],
+    ["unknown bet kind", { type: "submit_intent", intent: { type: "place_bet", actorId: "gateway-human", seatId: "gateway-table-seat-1", betKind: "dragon", amount: 100 } }],
+    ["non-number amount", { type: "submit_intent", intent: { type: "place_bet", actorId: "gateway-human", seatId: "gateway-table-seat-1", betKind: "player", amount: "100" } }],
+    ["serialized NaN amount", { type: "submit_intent", intent: { type: "place_bet", actorId: "gateway-human", seatId: "gateway-table-seat-1", betKind: "player", amount: Number.NaN } }],
+    ["empty actor id", { type: "submit_intent", intent: { type: "clear_bets", actorId: "", seatId: "gateway-table-seat-1" } }],
+    ["empty seat id", { type: "submit_intent", intent: { type: "clear_bets", actorId: "gateway-human", seatId: "" } }],
+  ])("rejects malformed %s and remains alive", async (_caseName, malformedMessage) => {
+    const { humanActorId, room, store, tableId, url } = await createGateway();
+    const socket = await connectClient(url);
+    await joinClient(socket, tableId, humanActorId);
+    const snapshotBefore = room.getSnapshot();
+    const eventCountBefore = store.count();
+    const malformedResponse = waitForMessage(socket, (message) => message.type === "error");
+
+    socket.send(JSON.stringify(malformedMessage));
+
+    expect(await malformedResponse).toMatchObject({
+      type: "error",
+      code: "malformed_message",
+    });
+    expect(room.getSnapshot()).toEqual(snapshotBefore);
+    expect(store.count()).toBe(eventCountBefore);
+
+    const pongResponse = waitForMessage(socket, (message) => message.type === "pong");
+    socket.send(JSON.stringify({ type: "ping", nonce: 99 }));
+    expect(await pongResponse).toEqual({ type: "pong", nonce: 99 });
+    socket.close();
   });
 
   it("rejects socket attempts to buy into an AI seat without changing room state", async () => {

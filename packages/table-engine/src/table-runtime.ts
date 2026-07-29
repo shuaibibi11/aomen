@@ -16,6 +16,7 @@
  * fixed sequence and a live table can feed a seeded shoe.
  */
 import {
+  BET_KINDS,
   asRoundId,
   baccaratCardValue,
   baccaratHandTotal,
@@ -44,6 +45,8 @@ import {
   isMainBet,
 } from "./baccarat/payout.js";
 import { ChipLedger } from "./chip-ledger.js";
+
+const supportedBetKinds: ReadonlySet<unknown> = new Set(BET_KINDS);
 
 export interface TableRuntimeOptions {
   readonly tableId: TableId;
@@ -198,6 +201,9 @@ export class TableRuntime {
     }
     if (this.occupants.get(seatId) !== actorId) {
       return { accepted: false, rejectReason: "not_authorised" };
+    }
+    if (!supportedBetKinds.has(betKind)) {
+      return { accepted: false, rejectReason: "unknown_bet_kind" };
     }
     if (amount < this.rulePack.limits.min) {
       return { accepted: false, rejectReason: "bet_below_minimum" };

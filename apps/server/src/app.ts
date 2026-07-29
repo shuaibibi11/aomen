@@ -17,6 +17,8 @@ export interface AppOptions {
   readonly tableId?: string;
   /** Shoe seed for the demo room. */
   readonly shoeSeed?: string;
+  /** Credential required by clients joining the demo human actor. */
+  readonly demoRoomCredential?: string;
 }
 
 export interface App {
@@ -40,10 +42,17 @@ export async function createApp(options: AppOptions = {}): Promise<App> {
   );
 
   const demoTableId = asTableId(options.tableId ?? "demo-table");
+  // Development convenience only. Production deployments must override this
+  // through AppOptions or DEMO_ROOM_CREDENTIAL.
+  const demoRoomCredential =
+    options.demoRoomCredential ??
+    process.env.DEMO_ROOM_CREDENTIAL ??
+    "dev-demo-room-credential";
   const demoRoom = roomManager.createRoom({
     tableId: demoTableId,
     rulePack,
     humanActorId: asActorId("demo-human"),
+    joinCredential: demoRoomCredential,
     seatCount: 7,
     aiCount: 2,
     shoeSeed: options.shoeSeed ?? "demo-seed",

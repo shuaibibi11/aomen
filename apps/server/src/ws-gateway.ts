@@ -11,7 +11,9 @@
  */
 import { WebSocket, WebSocketServer } from "ws";
 import {
+  ClientMessageParseError,
   ROOM_PROTOCOL_VERSION,
+  parseClientMessage,
   type ClientMessage,
   type RoomErrorCode,
   type ServerMessage,
@@ -104,9 +106,9 @@ export class WsGateway {
   }
 
   private handleMessage(socket: WebSocket, raw: string): void {
-    let message: ClientMessage;
+    let parsedValue: unknown;
     try {
-      message = JSON.parse(raw) as ClientMessage;
+      parsedValue = JSON.parse(raw) as unknown;
     } catch {
       this.send(socket, {
         type: "error",
@@ -116,9 +118,29 @@ export class WsGateway {
       return;
     }
 
+    let message: ClientMessage;
+    try {
+      message = parseClientMessage(parsedValue);
+    } catch (error) {
+      if (!(error instanceof ClientMessageParseError)) {
+        throw error;
+      }
+      this.send(socket, {
+        type: "error",
+        code: "malformed_message",
+        message: "Message did not match the client protocol",
+      });
+      return;
+    }
+
     switch (message.type) {
       case "join_room":
-        this.handleJoin(socket, message.tableId, message.actorId);
+        this.handleJoin(
+          socket,
+          message.tableId,
+          message.actorId,
+          message.credential,
+        );
         return;
       case "submit_intent":
         this.handleIntent(socket, message);
@@ -139,6 +161,7 @@ export class WsGateway {
     socket: WebSocket,
     tableId: TableId,
     actorId: ActorId,
+    credential: string,
   ): void {
     const room = this.roomManager.getRoom(tableId);
     if (room === undefined) {
@@ -149,7 +172,7 @@ export class WsGateway {
       });
       return;
     }
-    if (!this.roomManager.isClientActorAllowed(tableId, actorId)) {
+    if (!this.roomManager.canClientJoin(tableId, actorId, credential)) {
       this.send(socket, {
         type: "error",
         code: "actor_not_allowed",
