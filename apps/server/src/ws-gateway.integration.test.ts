@@ -111,13 +111,15 @@ function createRoom(roomManager: RoomManager, name: string): Room {
 }
 
 async function createSelfHostedGateway() {
-  const roomManager = new RoomManager(new MemoryEventStore());
+  const store = new MemoryEventStore();
+  const roomManager = new RoomManager(store);
   const gateway = new WsGateway({ port: 0, roomManager });
   openGateways.push(gateway);
   await gateway.waitUntilListening();
   return {
     gateway,
     roomManager,
+    store,
     url: `ws://127.0.0.1:${gateway.getPort()}`,
   };
 }
@@ -159,6 +161,149 @@ async function waitForUpdate(client: WebSocketTestClient) {
 }
 
 describe("WsGateway real WebSocket integration", () => {
+  it("replays an executed request across reconnects without submitting or broadcasting again", async () => {
+    const { roomManager, store, url } = await createSelfHostedGateway();
+    const room = createRoom(roomManager, "reconnect-idempotency");
+    room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+    const firstClient = await connect(url);
+    const observerClient = await connect(url);
+    await Promise.all([join(firstClient, room), join(observerClient, room)]);
+    const request = {
+      type: "submit_intent",
+      requestId: "stable-request",
+      intent: {
+        type: "place_bet",
+        actorId: room.getSnapshot().seats[0]!.occupantId,
+        seatId: room.getHumanSeatId(),
+        betKind: "player",
+        amount: 100,
+      },
+    };
+    const eventCountBefore = store.count();
+
+    firstClient.send(request);
+    const originalResult = await firstClient.waitForMessage(
+      (message) => message.type === "intent_result",
+    );
+    await waitForUpdate(observerClient);
+    expect(store.count()).toBe(eventCountBefore + 1);
+    await firstClient.close();
+
+    const reconnectedClient = await connect(url);
+    await join(reconnectedClient, room);
+    reconnectedClient.send(request);
+
+    expect(await reconnectedClient.waitForMessage(
+      (message) => message.type === "intent_result",
+    )).toEqual(originalResult);
+    expect(store.count()).toBe(eventCountBefore + 1);
+    await expect(observerClient.waitForMessage(
+      (message) => message.type === "event" || message.type === "snapshot",
+      50,
+    )).rejects.toThrow(/timed out/i);
+  });
+
+  it("rejects a reused request identifier carrying a different intent", async () => {
+    const { roomManager, store, url } = await createSelfHostedGateway();
+    const room = createRoom(roomManager, "request-conflict");
+    room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+    const client = await connect(url);
+    await join(client, room);
+    const actorId = room.getSnapshot().seats[0]!.occupantId;
+    const baseRequest = {
+      type: "submit_intent",
+      requestId: "conflicting-request",
+      intent: {
+        type: "place_bet",
+        actorId,
+        seatId: room.getHumanSeatId(),
+        betKind: "player",
+        amount: 100,
+      },
+    };
+    client.send(baseRequest);
+    await client.waitForMessage((message) => message.type === "intent_result");
+    const eventCountAfterOriginal = store.count();
+
+    client.send({
+      ...baseRequest,
+      intent: { ...baseRequest.intent, amount: 200 },
+    });
+
+    expect(await client.waitForMessage((message) => message.type === "error"))
+      .toMatchObject({
+        type: "error",
+        code: "request_id_conflict",
+        requestId: "conflicting-request",
+      });
+    expect(store.count()).toBe(eventCountAfterOriginal);
+  });
+
+  it("evicts the oldest request after 1024 requests for one table and actor", async () => {
+    const { roomManager, store, url } = await createSelfHostedGateway();
+    const room = createRoom(roomManager, "request-eviction");
+    room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+    const client = await connect(url);
+    await join(client, room);
+    const actorId = room.getSnapshot().seats[0]!.occupantId;
+    const buildRequest = (requestId: string) => ({
+      type: "submit_intent",
+      requestId,
+      intent: {
+        type: "place_bet",
+        actorId,
+        seatId: room.getHumanSeatId(),
+        betKind: "player",
+        amount: 100,
+      },
+    });
+
+    for (let requestIndex = 0; requestIndex < 1_025; requestIndex += 1) {
+      client.send(buildRequest(`bounded-${requestIndex}`));
+      await client.waitForMessage(
+        (message) => message.type === "intent_result" && message.requestId === `bounded-${requestIndex}`,
+      );
+    }
+    const eventCountBeforeEvictedRetry = store.count();
+    client.send(buildRequest("bounded-0"));
+
+    await client.waitForMessage(
+      (message) => message.type === "intent_result" && message.requestId === "bounded-0",
+    );
+    expect(store.count()).toBe(eventCountBeforeEvictedRetry + 1);
+  }, 20_000);
+
+  it("isolates identical request identifiers between tables and actors", async () => {
+    const { roomManager, url } = await createSelfHostedGateway();
+    const firstRoom = createRoom(roomManager, "request-scope-first");
+    const secondRoom = createRoom(roomManager, "request-scope-second");
+    firstRoom.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+    secondRoom.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+    const firstClient = await connect(url);
+    const secondClient = await connect(url);
+    await Promise.all([join(firstClient, firstRoom), join(secondClient, secondRoom)]);
+    for (const [client, room] of [[firstClient, firstRoom], [secondClient, secondRoom]] as const) {
+      client.send({
+        type: "submit_intent",
+        requestId: "shared-request-id",
+        intent: {
+          type: "place_bet",
+          actorId: room.getSnapshot().seats[0]!.occupantId,
+          seatId: room.getHumanSeatId(),
+          betKind: "player",
+          amount: 100,
+        },
+      });
+    }
+
+    const results = await Promise.all([
+      firstClient.waitForMessage((message) => message.type === "intent_result"),
+      secondClient.waitForMessage((message) => message.type === "intent_result"),
+    ]);
+    expect(results).toHaveLength(2);
+    expect(results.every((message) => message.type === "intent_result")).toBe(true);
+  });
+
   it("self-hosts on an ephemeral port and reports its listening lifecycle", async () => {
     const roomManager = new RoomManager(new MemoryEventStore());
     const gateway = new WsGateway({ port: 0, roomManager });

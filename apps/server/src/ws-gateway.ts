@@ -15,6 +15,7 @@ import {
   ROOM_PROTOCOL_VERSION,
   parseClientMessage,
   type ClientMessage,
+  type IntentResultMessage,
   type RoomErrorCode,
   type ServerMessage,
 } from "@mct/room-protocol";
@@ -39,7 +40,28 @@ interface SocketContext {
   readonly actorId: ActorId;
 }
 
-const MAXIMUM_REQUEST_IDS_PER_SOCKET = 1024;
+const MAXIMUM_REQUEST_RESULTS_PER_ACTOR = 1024;
+
+interface CachedIntentResult {
+  readonly intentFingerprint: string;
+  readonly result: IntentResultMessage;
+}
+
+function createCanonicalFingerprint(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(createCanonicalFingerprint).join(",")}]`;
+  }
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    const properties = Object.keys(record)
+      .sort()
+      .map((propertyName) =>
+        `${JSON.stringify(propertyName)}:${createCanonicalFingerprint(record[propertyName])}`,
+      );
+    return `{${properties.join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
 
 export function getIntentActorError(
   joinedActorId: ActorId,
@@ -63,7 +85,11 @@ export class WsGateway {
   private readonly activeSockets = new Set<WebSocket>();
   /** Authoritative identity and table established by each successful join. */
   private readonly socketContexts = new Map<WebSocket, SocketContext>();
-  private readonly handledRequestIds = new Map<WebSocket, Map<string, true>>();
+  /** FIFO request results, scoped by authoritative table and actor identity. */
+  private readonly requestResults = new Map<
+    TableId,
+    Map<ActorId, Map<string, CachedIntentResult>>
+  >();
   private readonly roomSubscriptions = new Map<
     TableId,
     UnsubscribeRoomUpdates
@@ -174,7 +200,6 @@ export class WsGateway {
       this.handleSocketClosed(socket);
       const context = this.socketContexts.get(socket);
       this.socketContexts.delete(socket);
-      this.handledRequestIds.delete(socket);
       if (context !== undefined) {
         this.removeUnusedRoomSubscription(context.tableId);
       }
@@ -319,23 +344,24 @@ export class WsGateway {
       });
       return;
     }
-    const requestIds = this.handledRequestIds.get(socket) ?? new Map<string, true>();
-    this.handledRequestIds.set(socket, requestIds);
-    if (requestIds.has(requestId)) {
+    const intentFingerprint = createCanonicalFingerprint(message.intent);
+    const actorRequestResults = this.getActorRequestResults(
+      context.tableId,
+      context.actorId,
+    );
+    const cachedRequest = actorRequestResults.get(requestId);
+    if (cachedRequest !== undefined) {
+      if (cachedRequest.intentFingerprint === intentFingerprint) {
+        this.send(socket, cachedRequest.result);
+        return;
+      }
       this.send(socket, {
         type: "error",
-        code: "duplicate_request",
-        message: "This request identifier was already handled",
+        code: "request_id_conflict",
+        message: "This request identifier was already used for another intent",
         requestId,
       });
       return;
-    }
-    requestIds.set(requestId, true);
-    if (requestIds.size > MAXIMUM_REQUEST_IDS_PER_SOCKET) {
-      const oldestRequestId = requestIds.keys().next().value as string | undefined;
-      if (oldestRequestId !== undefined) {
-        requestIds.delete(oldestRequestId);
-      }
     }
     const actorError = getIntentActorError(context.actorId, message.intent);
     if (actorError !== null) {
@@ -370,7 +396,17 @@ export class WsGateway {
 
     try {
       const event = room.submitIntent(message.intent);
-      this.send(socket, { type: "intent_result", requestId, event });
+      const result: IntentResultMessage = { type: "intent_result", requestId, event };
+      actorRequestResults.set(requestId, { intentFingerprint, result });
+      if (actorRequestResults.size > MAXIMUM_REQUEST_RESULTS_PER_ACTOR) {
+        const oldestRequestId = actorRequestResults.keys().next().value as
+          | string
+          | undefined;
+        if (oldestRequestId !== undefined) {
+          actorRequestResults.delete(oldestRequestId);
+        }
+      }
+      this.send(socket, result);
     } catch (error) {
       this.reportError(error);
       this.send(socket, {
@@ -380,6 +416,23 @@ export class WsGateway {
         requestId,
       });
     }
+  }
+
+  private getActorRequestResults(
+    tableId: TableId,
+    actorId: ActorId,
+  ): Map<string, CachedIntentResult> {
+    let tableRequestResults = this.requestResults.get(tableId);
+    if (tableRequestResults === undefined) {
+      tableRequestResults = new Map();
+      this.requestResults.set(tableId, tableRequestResults);
+    }
+    let actorRequestResults = tableRequestResults.get(actorId);
+    if (actorRequestResults === undefined) {
+      actorRequestResults = new Map();
+      tableRequestResults.set(actorId, actorRequestResults);
+    }
+    return actorRequestResults;
   }
 
   private reportError(error: unknown): void {
@@ -457,6 +510,7 @@ export class WsGateway {
     }
     this.roomSubscriptions.clear();
     this.socketContexts.clear();
+    this.requestResults.clear();
 
     for (const socket of this.server.clients) {
       this.terminateSocket(socket);

@@ -26,11 +26,14 @@ export function readSessionRuntimeConfig(
   const selectedRuntime = query.get("runtime") ?? globalConfig?.runtime ?? "local";
   if (selectedRuntime !== "remote") return { runtime: "local" };
 
+  // Endpoint, identity, and credential form one trust unit. URL values are
+  // intentionally never considered, so a crafted link cannot pair an
+  // application credential with an attacker-controlled endpoint or identity.
   const remoteConfig = {
     runtime: "remote" as const,
-    wsUrl: query.get("wsUrl") ?? globalConfig?.wsUrl,
-    tableId: query.get("tableId") ?? globalConfig?.tableId,
-    actorId: query.get("actorId") ?? globalConfig?.actorId,
+    wsUrl: globalConfig?.wsUrl,
+    tableId: globalConfig?.tableId,
+    actorId: globalConfig?.actorId,
     credential: globalConfig?.credential,
   };
   for (const fieldName of ["wsUrl", "tableId", "actorId", "credential"] as const) {

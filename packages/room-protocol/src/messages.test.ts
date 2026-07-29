@@ -126,6 +126,7 @@ describe("room protocol error codes", () => {
       "malformed_message",
       "internal_error",
       "duplicate_request",
+      "request_id_conflict",
     ]);
   });
 
@@ -133,6 +134,7 @@ describe("room protocol error codes", () => {
     expect(isRoomErrorCode("room_unavailable")).toBe(true);
     expect(isRoomErrorCode("intent_not_allowed")).toBe(true);
     expect(isRoomErrorCode("internal_error")).toBe(true);
+    expect(isRoomErrorCode("request_id_conflict")).toBe(true);
     expect(isRoomErrorCode("database_exploded")).toBe(false);
     expect(isRoomErrorCode(null)).toBe(false);
   });

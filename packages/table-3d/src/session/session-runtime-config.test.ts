@@ -8,38 +8,55 @@ describe("readSessionRuntimeConfig", () => {
       .toEqual({ runtime: "local" });
   });
 
-  it("combines non-sensitive URL fields with an injected in-memory credential", () => {
+  it("uses the complete trusted in-memory remote configuration", () => {
     const query = new URLSearchParams(
-      "runtime=remote&wsUrl=ws%3A%2F%2Fhost&tableId=table-1&actorId=actor-1",
+      "runtime=remote&camera=dealer",
     );
-    const config = readSessionRuntimeConfig(query, { credential: "secret" });
+    const config = readSessionRuntimeConfig(query, {
+      runtime: "remote",
+      wsUrl: "wss://trusted.example/room",
+      tableId: "trusted-table",
+      actorId: "trusted-actor",
+      credential: "trusted-secret",
+    });
 
     expect(config).toEqual({
       runtime: "remote",
-      wsUrl: "ws://host",
-      tableId: "table-1",
-      actorId: "actor-1",
+      wsUrl: "wss://trusted.example/room",
+      tableId: "trusted-table",
+      actorId: "trusted-actor",
     });
-    expect(config.runtime === "remote" && config.credential).toBe("secret");
-    expect(JSON.stringify(config)).not.toContain("secret");
-    expect(query.toString()).not.toContain("secret");
+    expect(config.runtime === "remote" && config.credential).toBe("trusted-secret");
+    expect(JSON.stringify(config)).not.toContain("trusted-secret");
   });
 
-  it("ignores URL credentials and rejects remote mode without an injected credential", () => {
+  it("ignores every URL endpoint, identity, and credential override", () => {
     const query = new URLSearchParams(
-      "runtime=remote&wsUrl=ws%3A%2F%2Fhost&tableId=table-1&actorId=actor-1&credential=url-secret",
+      "runtime=remote&wsUrl=wss%3A%2F%2Fevil.example%2Fsteal&tableId=evil-table&actorId=evil-actor&credential=evil-secret",
     );
+    const config = readSessionRuntimeConfig(query, {
+      runtime: "remote",
+      wsUrl: "wss://trusted.example/room",
+      tableId: "trusted-table",
+      actorId: "trusted-actor",
+      credential: "trusted-secret",
+    });
 
-    expect(() => readSessionRuntimeConfig(query)).toThrow(/credential.*URL|secure.*credential/i);
-    try {
-      readSessionRuntimeConfig(query);
-    } catch (error) {
-      expect(String(error)).not.toContain("url-secret");
-    }
+    expect(config).toMatchObject({
+      runtime: "remote",
+      wsUrl: "wss://trusted.example/room",
+      tableId: "trusted-table",
+      actorId: "trusted-actor",
+    });
+    expect(config.runtime === "remote" && config.credential).toBe("trusted-secret");
+    expect(JSON.stringify(config)).not.toContain("evil");
   });
 
-  it("rejects an incomplete explicit remote configuration", () => {
+  it("rejects remote selection unless the trusted configuration is complete", () => {
     expect(() => readSessionRuntimeConfig(new URLSearchParams("runtime=remote")))
       .toThrow(/wsUrl/i);
+    expect(() => readSessionRuntimeConfig(
+      new URLSearchParams("runtime=remote&wsUrl=wss%3A%2F%2Fevil.example&tableId=evil&actorId=evil&credential=evil"),
+    )).toThrow(/wsUrl/i);
   });
 });

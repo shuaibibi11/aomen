@@ -388,7 +388,7 @@ describe("WsGateway room delivery", () => {
     socket.close();
   });
 
-  it("does not execute a repeated request identifier twice", async () => {
+  it("replays a repeated request identifier without executing twice", async () => {
     const { humanActorId, room, store, tableId, url } = await createGateway();
     const socket = await connectClient(url);
     await joinClient(socket, tableId, humanActorId);
@@ -407,18 +407,14 @@ describe("WsGateway room delivery", () => {
     };
     const firstResult = waitForMessage(socket, (message) => message.type === "intent_result");
     socket.send(JSON.stringify(request));
-    await firstResult;
-    const duplicateError = waitForMessage(
+    const originalResult = await firstResult;
+    const replayedResult = waitForMessage(
       socket,
-      (message) => message.type === "error" && message.code === "duplicate_request",
+      (message) => message.type === "intent_result" && message.requestId === "same-request",
     );
     socket.send(JSON.stringify(request));
 
-    expect(await duplicateError).toMatchObject({
-      type: "error",
-      code: "duplicate_request",
-      requestId: "same-request",
-    });
+    expect(await replayedResult).toEqual(originalResult);
     expect(store.count()).toBe(eventCountBefore + 1);
     socket.close();
   });

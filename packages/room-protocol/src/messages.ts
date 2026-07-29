@@ -273,6 +273,7 @@ export const ROOM_ERROR_CODES = [
   "malformed_message",
   "internal_error",
   "duplicate_request",
+  "request_id_conflict",
 ] as const;
 
 export type RoomErrorCode = (typeof ROOM_ERROR_CODES)[number];
