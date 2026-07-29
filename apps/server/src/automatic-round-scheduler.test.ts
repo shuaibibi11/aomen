@@ -10,6 +10,8 @@ import { MemoryEventStore } from "./memory-event-store.js";
 import type { EventStore } from "./memory-event-store.js";
 import type { RoomUpdate } from "./room-events.js";
 import { RoomManager } from "./room-manager.js";
+import { FakeLlmProvider } from "./ai/fake-llm-provider.js";
+import { LlmPlayerAi } from "./ai/llm-player-ai.js";
 
 const TIMING: AutomaticRoundTiming = {
   bettingWindowMs: 1_000,
@@ -116,6 +118,45 @@ describe("AutomaticRoundScheduler", () => {
       store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
     ).toHaveLength(2);
     expect(store.listByTable(tableId).at(-1)?.intent?.type).toBe("no_more_bets");
+  });
+
+  it("continues scheduling when every LLM provider request fails", async () => {
+    const tableId = asTableId("provider-failure-scheduler-table");
+    const rulePack = createRulePack();
+    const store = new MemoryEventStore();
+    const room = new RoomManager(store).createRoom({
+      tableId,
+      rulePack,
+      humanActorId: asActorId("provider-failure-human"),
+      joinCredential: "provider-failure-credential",
+      seatCount: 3,
+      aiCount: 2,
+      shoeSeed: "provider-failure-seed",
+      aiDecisionSourceFactory: ({ seed }) => new LlmPlayerAi({
+        provider: new FakeLlmProvider([new Error("provider failed")]),
+        model: "test-model",
+        rulePack,
+        seed,
+        timeoutMs: 100,
+      }),
+    });
+    const onError = vi.fn();
+    const scheduler = new AutomaticRoundScheduler(room, TIMING, { onError });
+
+    scheduler.start();
+    await advance(0);
+
+    expect(
+      store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
+    ).toHaveLength(2);
+    expect(scheduler.isRunning()).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+
+    await advance(TIMING.bettingWindowMs);
+    while (room.getSnapshot().phase !== "round_end") {
+      await advance(TIMING.cardDealIntervalMs);
+    }
+    expect(scheduler.isRunning()).toBe(true);
   });
 
   it("closes betting at the deadline without awaiting pending AI", async () => {
