@@ -7,6 +7,7 @@
  * covered by @mct/table-engine's own suite and are not re-tested here.
  */
 import { describe, expect, it } from "vitest";
+import type { RulePack } from "@mct/rule-packs";
 import { validateRulePack } from "@mct/rule-packs/validate";
 import { DEV_RULE_PACK } from "./dev-rule-pack.js";
 import { LocalTableSession } from "./local-table-session.js";
@@ -95,6 +96,59 @@ describe("seat mapping", () => {
 });
 
 describe("opening a session", () => {
+  it("exposes only side-bet spots enabled by the authoritative rule pack", () => {
+    const playerPairOnlyPack = {
+      ...DEV_RULE_PACK,
+      sideBets: [{ kind: "player_pair", payout: 13 }],
+    } satisfies RulePack;
+    const session = new LocalTableSession({
+      variant: "mass",
+      rulePack: playerPairOnlyPack,
+    });
+
+    expect(session.getBetSpots().map((spot) => spot.id)).toEqual([
+      "player_pair",
+      "player",
+      "banker",
+      "tie",
+    ]);
+    expect(
+      session.getBetSpots().find((spot) => spot.id === "player_pair")?.sublabel,
+    ).toBe("13 : 1");
+  });
+
+  it("always exposes main spots when the authoritative pack has no side bets", () => {
+    const mainBetsOnlyPack = {
+      ...DEV_RULE_PACK,
+      sideBets: [],
+    } satisfies RulePack;
+    const session = new LocalTableSession({
+      variant: "mass",
+      rulePack: mainBetsOnlyPack,
+    });
+
+    expect(session.getBetSpots().map((spot) => spot.id)).toEqual([
+      "player",
+      "banker",
+      "tie",
+    ]);
+  });
+
+  it("uses the authoritative commission rate in the banker spot label", () => {
+    const customCommissionPack = {
+      ...DEV_RULE_PACK,
+      commission: { rate: 0.07 },
+    } satisfies RulePack;
+    const session = new LocalTableSession({
+      variant: "mass",
+      rulePack: customCommissionPack,
+    });
+
+    expect(
+      session.getBetSpots().find((spot) => spot.id === "banker")?.sublabel,
+    ).toBe("1 : 1 扣 7%");
+  });
+
   it("funds every seat", () => {
     const session = openSession();
     for (const seat of session.getSeats()) {

@@ -563,6 +563,8 @@ export class PreviewApp {
       theme,
       casinoId: this.activeCasinoId,
       variant,
+      betSpots: session.getBetSpots(),
+      commission: session.getRulePack().variant === "standard",
       showDemoBets: false,
     });
     this.contentGroup.add(table);
@@ -599,7 +601,13 @@ export class PreviewApp {
     table.add(interaction.cardGroup);
     this.betInteraction = interaction;
     this.unsubscribeTableSession?.();
-    this.unsubscribeTableSession = session.subscribe(() => {
+    this.unsubscribeTableSession = session.subscribe((update) => {
+      if (update.configurationChanged === true) {
+        // The authoritative incarnation may expose different spots or payouts.
+        // Rebuild the felt from the same fresh session list used for hit-testing.
+        this.rebuildContent();
+        return;
+      }
       this.updateInfoPanel();
       this.onTableStateChanged?.();
     });

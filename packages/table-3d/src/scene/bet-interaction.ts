@@ -190,6 +190,7 @@ export class BetInteraction {
       localPoint.x,
       localPoint.z,
       this.seatPlacements,
+      this.session.getBetSpots(),
     );
     if (spotHit === null) {
       return null;

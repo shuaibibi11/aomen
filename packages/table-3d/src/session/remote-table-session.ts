@@ -125,10 +125,13 @@ export class RemoteTableSession implements TableSession {
       throw new Error("Joined actor does not occupy an authoritative seat");
     }
     this.guestSeat = guestSeat;
-    this.betSpots = buildSeatBetSpots(
-      `${joined.rulePack.mainPayouts.tie} : 1`,
-      joined.rulePack.variant === "standard",
-    );
+    this.betSpots = buildSeatBetSpots({
+      tiePayout: `${joined.rulePack.mainPayouts.tie} : 1`,
+      commissionRate: joined.rulePack.variant === "standard"
+        ? joined.rulePack.commission.rate
+        : null,
+      sideBets: joined.rulePack.sideBets,
+    });
     this.unsubscribeMessage = this.connection.subscribeMessage((message) => {
       this.handleMessage(message);
     });
@@ -383,10 +386,13 @@ export class RemoteTableSession implements TableSession {
     const guestSeat = this.seats.find((seat) => seat.occupantId === this.actorId);
     if (guestSeat === undefined) throw new Error("Joined actor does not occupy an authoritative seat");
     this.guestSeat = guestSeat;
-    this.betSpots = buildSeatBetSpots(
-      `${message.rulePack.mainPayouts.tie} : 1`,
-      message.rulePack.variant === "standard",
-    );
+    this.betSpots = buildSeatBetSpots({
+      tiePayout: `${message.rulePack.mainPayouts.tie} : 1`,
+      commissionRate: message.rulePack.variant === "standard"
+        ? message.rulePack.commission.rate
+        : null,
+      sideBets: message.rulePack.sideBets,
+    });
   }
 
   private resendPendingCommands(): void {

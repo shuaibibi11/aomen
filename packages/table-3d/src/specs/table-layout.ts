@@ -9,6 +9,7 @@
  * Reference: docs/superpowers/specs/2026-07-27-baccarat-table-real-spec.md
  */
 import type { BetKind } from "@mct/shared";
+import type { SideBetRule } from "@mct/rule-packs/schema";
 import { millimetresToMetres } from "./dimensions.js";
 
 export type TableVariant = "mass" | "vip";
@@ -218,10 +219,20 @@ export const MAX_SEAT_FACING_RADIANS = (18 * Math.PI) / 180;
  *   pair circles → PLAYER → BANKER → TIE
  * which is the order the real-table spec requires.
  */
+export interface BetSpotRuleOptions {
+  readonly tiePayout: string;
+  readonly commissionRate: number | null;
+  readonly sideBets: readonly SideBetRule[];
+}
+
+function formatPercentage(rate: number): string {
+  return String(Number((rate * 100).toFixed(10)));
+}
+
 export function buildSeatBetSpots(
-  tiePayout: string,
-  commission: boolean,
+  options: BetSpotRuleOptions,
 ): readonly BetSpotSpec[] {
+  const { tiePayout, commissionRate, sideBets } = options;
   const { boxWidth, boxDepth, tieDepth, boxGap, pairRadius } = SEAT_BLOCK;
 
   // Walk inwards from the guest edge. +localZ points at the guest, so moving
@@ -234,29 +245,38 @@ export function buildSeatBetSpots(
   // Pair circles tuck into the corners beside the PLAYER box.
   const pairOffsetX = boxWidth / 2 - pairRadius;
 
-  return [
-    {
+  const sideBetSpots: BetSpotSpec[] = [];
+  const playerPairRule = sideBets.find((sideBet) => sideBet.kind === "player_pair");
+  if (playerPairRule !== undefined) {
+    sideBetSpots.push({
       id: "player_pair",
       label: "閒對",
-      sublabel: "11:1",
+      sublabel: `${playerPairRule.payout} : 1`,
       localZ: pairCentreZ,
       localX: -pairOffsetX,
       shape: "circle",
       width: pairRadius * 2,
       depth: pairRadius * 2,
       radius: pairRadius,
-    },
-    {
+    });
+  }
+  const bankerPairRule = sideBets.find((sideBet) => sideBet.kind === "banker_pair");
+  if (bankerPairRule !== undefined) {
+    sideBetSpots.push({
       id: "banker_pair",
       label: "莊對",
-      sublabel: "11:1",
+      sublabel: `${bankerPairRule.payout} : 1`,
       localZ: pairCentreZ,
       localX: pairOffsetX,
       shape: "circle",
       width: pairRadius * 2,
       depth: pairRadius * 2,
       radius: pairRadius,
-    },
+    });
+  }
+
+  return [
+    ...sideBetSpots,
     {
       id: "player",
       label: "閒 PLAYER",
@@ -271,7 +291,9 @@ export function buildSeatBetSpots(
     {
       id: "banker",
       label: "莊 BANKER",
-      sublabel: commission ? "1 : 1 扣 5%" : "1 : 1",
+      sublabel: commissionRate === null
+        ? "1 : 1"
+        : `1 : 1 扣 ${formatPercentage(commissionRate)}%`,
       localZ: bankerCentreZ,
       localX: 0,
       shape: "box",
@@ -294,7 +316,14 @@ export function buildSeatBetSpots(
 }
 
 /** Reference spot list used by the geometry tests and the fit checks. */
-export const REFERENCE_BET_SPOTS = buildSeatBetSpots("8 : 1", true);
+export const REFERENCE_BET_SPOTS = buildSeatBetSpots({
+  tiePayout: "8 : 1",
+  commissionRate: 0.05,
+  sideBets: [
+    { kind: "player_pair", payout: 11 },
+    { kind: "banker_pair", payout: 11 },
+  ],
+});
 
 /** Total depth of the printed block, from the guest edge to the TIE band. */
 export const SEAT_BLOCK_TOTAL_DEPTH =

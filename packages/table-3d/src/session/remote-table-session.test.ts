@@ -161,6 +161,29 @@ describe("RemoteTableSession", () => {
     expect(connection.closed).toBe(true);
   });
 
+  it("exposes only side-bet spots enabled by the authoritative bootstrap", async () => {
+    const connection = new FakeConnection();
+    connection.connect = () => Promise.resolve({
+      ...joined,
+      rulePack: {
+        ...joined.rulePack,
+        sideBets: [{ kind: "banker_pair", payout: 17 }],
+      },
+    });
+
+    const session = await RemoteTableSession.create({ connection });
+
+    expect(session.getBetSpots().map((spot) => spot.id)).toEqual([
+      "banker_pair",
+      "player",
+      "banker",
+      "tie",
+    ]);
+    expect(
+      session.getBetSpots().find((spot) => spot.id === "banker_pair")?.sublabel,
+    ).toBe("17 : 1");
+  });
+
   it("surfaces an authoritative rejected bet without mutating the last snapshot", async () => {
     const connection = new FakeConnection();
     const session = await RemoteTableSession.create({ connection, commandTimeoutMs: 1_000 });
@@ -253,7 +276,12 @@ describe("RemoteTableSession", () => {
       ...joined,
       roomInstanceId: "instance-2",
       snapshot: { ...snapshot, lastEventSeq: 0, seats: [{ seatId: replacementSeatId, occupantId: actorId, stack: 500 }] },
-      rulePack: { ...joined.rulePack, id: "replacement-pack", displayName: "Replacement pack" },
+      rulePack: {
+        ...joined.rulePack,
+        id: "replacement-pack",
+        displayName: "Replacement pack",
+        sideBets: [{ kind: "player_pair", payout: 9 }],
+      },
       seats: [{ seatId: replacementSeatId, label: 3, occupantId: actorId }],
     } satisfies JoinedMessage;
 
@@ -263,6 +291,15 @@ describe("RemoteTableSession", () => {
     expect(session.getRulePack().id).toBe("replacement-pack");
     expect(session.getSeats()).toEqual([{ seatId: replacementSeatId, label: 3, occupantId: actorId }]);
     expect(session.getSnapshot().lastEventSeq).toBe(0);
+    expect(session.getBetSpots().map((spot) => spot.id)).toEqual([
+      "player_pair",
+      "player",
+      "banker",
+      "tie",
+    ]);
+    expect(
+      session.getBetSpots().find((spot) => spot.id === "player_pair")?.sublabel,
+    ).toBe("9 : 1");
     expect(connection.sent).toHaveLength(1);
     expect(updates.at(-1)).toMatchObject({ configurationChanged: true });
   });

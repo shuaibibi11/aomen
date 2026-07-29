@@ -26,6 +26,8 @@ const LAYOUT_TEXTURE_WIDTH = 2048;
 export interface FeltLayoutOptions {
   readonly theme: CasinoTheme;
   readonly variant: TableVariant;
+  readonly betSpots?: readonly BetSpotSpec[];
+  readonly commission?: boolean;
 }
 
 interface DrawContext {
@@ -386,17 +388,21 @@ export function createFeltLayoutTexture(
 
   // One spot list for the whole table: the payout labels come from the rule
   // data, and every seat prints the same geometry.
-  const betSpots = buildSeatBetSpots(
-    theme.tableRules.tiePayout,
-    theme.tableRules.commission,
-  );
+  const betSpots = options.betSpots ?? buildSeatBetSpots({
+    tiePayout: theme.tableRules.tiePayout,
+    commissionRate: theme.tableRules.commission ? 0.05 : null,
+    sideBets: [
+      { kind: "player_pair", payout: 11 },
+      { kind: "banker_pair", payout: 11 },
+    ],
+  });
 
   const seatPlacements = computeSeatPlacements(variant);
   for (const seat of seatPlacements) {
     drawSeatBlock(draw, theme, seat, betSpots);
   }
 
-  if (theme.tableRules.commission) {
+  if (options.commission ?? theme.tableRules.commission) {
     drawCommissionRow(
       draw,
       theme,

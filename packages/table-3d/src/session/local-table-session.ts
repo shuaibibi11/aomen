@@ -46,10 +46,13 @@ export class LocalTableSession implements TableSession {
       guestSeatLabel,
     } = options;
     this.rulePack = rulePack;
-    this.betSpots = buildSeatBetSpots(
-      `${rulePack.mainPayouts.tie} : 1`,
-      rulePack.variant === "standard",
-    );
+    this.betSpots = buildSeatBetSpots({
+      tiePayout: `${rulePack.mainPayouts.tie} : 1`,
+      commissionRate: rulePack.variant === "standard"
+        ? rulePack.commission.rate
+        : null,
+      sideBets: rulePack.sideBets,
+    });
 
     const tableId = asTableId(`table-3d-${variant}`);
     const seatLabels = getSeatLabels(variant);

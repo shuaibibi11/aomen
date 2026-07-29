@@ -14,6 +14,7 @@ import {
   DEALER_STATION_LAYOUT,
   TABLE_SIZE,
   type TableVariant,
+  type BetSpotSpec,
 } from "../specs/table-layout.js";
 import { SAMPLE_SHOE_RESULTS } from "../specs/sample-shoe.js";
 import { createFeltLayoutTexture } from "../textures/felt-layout-texture.js";
@@ -28,6 +29,8 @@ export interface BaccaratTableOptions {
   readonly theme: CasinoTheme;
   readonly casinoId: CasinoId;
   readonly variant: TableVariant;
+  readonly betSpots?: readonly BetSpotSpec[];
+  readonly commission?: boolean;
   /** Place demo bet stacks in the seat boxes so scale is easy to judge. */
   readonly showDemoBets?: boolean;
 }
@@ -91,12 +94,24 @@ function createDropBox(theme: CasinoTheme): THREE.Group {
 export function createBaccaratTable(
   options: BaccaratTableOptions,
 ): THREE.Group {
-  const { theme, casinoId, variant, showDemoBets = true } = options;
+  const {
+    theme,
+    casinoId,
+    variant,
+    betSpots,
+    commission = theme.tableRules.commission,
+    showDemoBets = true,
+  } = options;
 
   const table = new THREE.Group();
   table.name = `baccarat-table-${casinoId}-${variant}`;
 
-  const layoutTexture = createFeltLayoutTexture({ theme, variant });
+  const layoutTexture = createFeltLayoutTexture({
+    theme,
+    variant,
+    betSpots,
+    commission,
+  });
   table.add(createTableBody({ theme, layoutTexture }));
 
   // Everything resting on the cloth shares one parent at felt height.
@@ -186,7 +201,7 @@ export function createBaccaratTable(
     variant,
     seatCount: seatPlacements.length,
     seatLabels: seatPlacements.map((seat) => seat.label),
-    commission: theme.tableRules.commission,
+    commission,
     widthMm: 2400,
     depthMm: 1400,
   };
