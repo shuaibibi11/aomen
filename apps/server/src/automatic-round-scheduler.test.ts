@@ -270,6 +270,51 @@ describe("AutomaticRoundScheduler", () => {
     expect(store.count()).toBe(eventCountAfterStop);
   });
 
+  it("does not repeat AI bets when restarted during betting", async () => {
+    const { humanActorId, room, store, tableId } = createRealRoom();
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+    const getAiBetEvents = () =>
+      store
+        .listByTable(tableId)
+        .filter(
+          (event) =>
+            event.intent?.type === "place_bet" &&
+            event.intent.actorId !== humanActorId,
+        );
+    const getAiSeatStacks = () =>
+      room
+        .getSnapshot()
+        .seats.filter((seat) => seat.occupantId !== humanActorId)
+        .map((seat) => ({ seatId: seat.seatId, stack: seat.stack }));
+
+    scheduler.start();
+    await advance(0);
+
+    const firstRoundBets = room.getSnapshot().bets;
+    const firstRoundAiStacks = getAiSeatStacks();
+    expect(firstRoundBets).toHaveLength(2);
+    expect(getAiBetEvents()).toHaveLength(2);
+
+    scheduler.stop();
+    scheduler.start();
+    await advance(0);
+
+    expect(room.getSnapshot().bets).toEqual(firstRoundBets);
+    expect(getAiSeatStacks()).toEqual(firstRoundAiStacks);
+    expect(getAiBetEvents()).toHaveLength(2);
+
+    await advance(TIMING.bettingWindowMs);
+    while (room.getSnapshot().phase !== "round_end") {
+      await advance(TIMING.cardDealIntervalMs);
+    }
+    await advance(TIMING.settlementDisplayMs + TIMING.interRoundDelayMs);
+    await advance(0);
+
+    expect(room.getSnapshot().phase).toBe("round_betting");
+    expect(room.getSnapshot().bets).toHaveLength(2);
+    expect(getAiBetEvents()).toHaveLength(4);
+  });
+
   it("stops before the next action when the room becomes faulted", async () => {
     let roomIsFaulted = false;
     const room: AutomaticRoundRoom = {

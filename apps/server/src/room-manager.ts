@@ -283,13 +283,21 @@ export class Room {
   /** Ask each seated AI for its bet while betting remains open. */
   async placeAutomaticPlayerBets(signal: AbortSignal): Promise<void> {
     for (const seated of this.aiSeats) {
-      if (signal.aborted || this.runtime.getSnapshot().phase !== "round_betting") {
+      const snapshotBeforeDecision = this.runtime.getSnapshot();
+      if (signal.aborted || snapshotBeforeDecision.phase !== "round_betting") {
         return;
+      }
+      if (snapshotBeforeDecision.bets.some((bet) => bet.seatId === seated.seatId)) {
+        continue;
       }
 
       const bet = await seated.ai.decideBet();
-      if (signal.aborted || this.runtime.getSnapshot().phase !== "round_betting") {
+      const snapshotAfterDecision = this.runtime.getSnapshot();
+      if (signal.aborted || snapshotAfterDecision.phase !== "round_betting") {
         return;
+      }
+      if (snapshotAfterDecision.bets.some((placedBet) => placedBet.seatId === seated.seatId)) {
+        continue;
       }
       if (bet !== null) {
         this.applyAutomaticIntent(bet);
