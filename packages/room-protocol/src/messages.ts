@@ -274,6 +274,16 @@ const tablePhaseSet: ReadonlySet<unknown> = new Set([
 const rankSet: ReadonlySet<unknown> = new Set(RANKS);
 const suitSet: ReadonlySet<unknown> = new Set(SUITS);
 const roundOutcomeSet: ReadonlySet<unknown> = new Set(["player", "banker", "tie"]);
+const rejectReasonSet: ReadonlySet<unknown> = new Set([
+  "wrong_phase",
+  "not_authorised",
+  "bet_below_minimum",
+  "bet_above_maximum",
+  "insufficient_funds",
+  "no_such_seat",
+  "unknown_bet_kind",
+  "unknown_intent",
+]);
 
 function requireServerObject(value: unknown, fieldName: string): UntrustedObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -372,9 +382,45 @@ function parseTableEvent(value: unknown): TableEvent {
   if (!tablePhaseSet.has(event.phaseAfter)) {
     throw new ServerMessageParseError("message.event.phaseAfter is not supported");
   }
+  if ("intent" in event) {
+    try {
+      parseTableIntent(event.intent);
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : "intent is invalid";
+      throw new ServerMessageParseError(`message.event.${detail}`);
+    }
+  }
+  if ("accepted" in event && typeof event.accepted !== "boolean") {
+    throw new ServerMessageParseError("message.event.accepted must be a boolean");
+  }
+  if ("rejectReason" in event && !rejectReasonSet.has(event.rejectReason)) {
+    throw new ServerMessageParseError("message.event.rejectReason is not supported");
+  }
+  if ("cardsRevealed" in event) {
+    for (const [cardIndex, card] of requireArray(
+      event.cardsRevealed,
+      "message.event.cardsRevealed",
+    ).entries()) {
+      validateCard(card, `message.event.cardsRevealed[${cardIndex}]`);
+    }
+  }
+  if ("outcome" in event && !roundOutcomeSet.has(event.outcome)) {
+    throw new ServerMessageParseError("message.event.outcome is not supported");
+  }
+  if ("visibleMask" in event) {
+    for (const [actorIndex, actorId] of requireArray(
+      event.visibleMask,
+      "message.event.visibleMask",
+    ).entries()) {
+      asActorId(requireServerString(
+        actorId,
+        `message.event.visibleMask[${actorIndex}]`,
+      ));
+    }
+  }
   requireServerString(event.rulePackId, "message.event.rulePackId");
   requireServerString(event.rulePackVersion, "message.event.rulePackVersion");
-  requireFiniteNumber(event.at, "message.event.at");
+  requireNonNegativeInteger(event.at, "message.event.at");
   return event as unknown as TableEvent;
 }
 

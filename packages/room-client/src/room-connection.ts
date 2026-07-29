@@ -3,6 +3,7 @@ import {
   ServerMessageParseError,
   parseServerMessage,
   type ClientMessage,
+  type RoomErrorCode,
   type ServerMessage,
 } from "@mct/room-protocol";
 import type { ActorId, TableId, TableIntent, TableSnapshot } from "@mct/shared";
@@ -26,6 +27,11 @@ import {
 
 const WEB_SOCKET_OPEN_STATE = 1;
 const HEARTBEAT_CLOSE_CODE = 4000;
+const JOIN_REJECTED_CLOSE_CODE = 4001;
+const TRANSIENT_JOIN_ERROR_CODES: ReadonlySet<RoomErrorCode> = new Set([
+  "room_unavailable",
+  "internal_error",
+]);
 
 export interface RoomConnectionConfig {
   readonly url: string;
@@ -49,6 +55,16 @@ export class RoomConnectionUnavailableError extends Error {
   constructor(message = "Room connection is not joined") {
     super(message);
     this.name = "RoomConnectionUnavailableError";
+  }
+}
+
+export class JoinRejectedError extends Error {
+  constructor(
+    readonly code: RoomErrorCode,
+    message: string,
+  ) {
+    super(`${code}: ${message}`);
+    this.name = "JoinRejectedError";
   }
 }
 
@@ -195,7 +211,7 @@ export class RoomConnection {
     ) {
       throw new RoomConnectionUnavailableError();
     }
-    this.sendSerialized(activeSocket.socket, message);
+    this.sendSerialized(activeSocket, message);
   }
 
   async submitIntent(intent: TableIntent): Promise<void> {
@@ -271,12 +287,16 @@ export class RoomConnection {
       return;
     }
     this.transitionState("joining");
-    this.sendSerialized(activeSocket.socket, {
-      type: "join_room",
-      tableId: this.config.tableId,
-      actorId: this.config.actorId,
-      credential: this.config.credential,
-    });
+    try {
+      this.sendSerialized(activeSocket, {
+        type: "join_room",
+        tableId: this.config.tableId,
+        actorId: this.config.actorId,
+        credential: this.config.credential,
+      });
+    } catch {
+      // sendSerialized already converted this generation's send error into transport recovery.
+    }
   }
 
   private handleMessage(generation: number, event: WebSocketMessageEvent): void {
@@ -300,6 +320,11 @@ export class RoomConnection {
 
     if (message.type === "pong") {
       this.handlePong(message.nonce, receivedAt);
+    } else if (message.type === "error" && this.stateSnapshot.state === "joining") {
+      this.updateSnapshot({ lastMessageAt: receivedAt });
+      this.notifyMessageListeners(message);
+      this.handleJoinRejection(generation, message.code, message.message);
+      return;
     } else if (message.type === "error") {
       this.reportError(new Error(`${message.code}: ${message.message}`), true);
       this.updateSnapshot({ lastMessageAt: receivedAt });
@@ -338,13 +363,50 @@ export class RoomConnection {
   }
 
   private handlePong(nonce: number, receivedAt: number): void {
-    if (this.outstandingPingNonce === null || nonce < this.outstandingPingNonce) {
+    if (this.outstandingPingNonce === null || nonce !== this.outstandingPingNonce) {
       this.updateSnapshot({ lastMessageAt: receivedAt });
       return;
     }
     this.outstandingPingNonce = null;
     this.outstandingPingSentAt = null;
     this.updateSnapshot({ lastMessageAt: receivedAt, lastPongAt: receivedAt });
+  }
+
+  private handleJoinRejection(
+    generation: number,
+    code: RoomErrorCode,
+    message: string,
+  ): void {
+    const activeSocket = this.getCurrentSocket(generation);
+    if (activeSocket === null || this.permanentlyClosed) {
+      return;
+    }
+
+    const rejectionError = new JoinRejectedError(code, message);
+    this.socketGeneration += 1;
+    this.activeSocket = null;
+    this.detachSocketListeners(activeSocket);
+    this.clearHeartbeatTimer();
+    if (activeSocket.socket.readyState <= WEB_SOCKET_OPEN_STATE) {
+      activeSocket.socket.close(JOIN_REJECTED_CLOSE_CODE, rejectionError.message);
+    }
+    this.reportError(rejectionError, true);
+    this.rejectBootstrap(rejectionError);
+    this.transitionState("disconnected");
+
+    if (TRANSIENT_JOIN_ERROR_CODES.has(code)) {
+      this.scheduleReconnect();
+    }
+  }
+
+  private rejectBootstrap(error: Error): void {
+    const bootstrap = this.bootstrap;
+    if (bootstrap === null || bootstrap.settled) {
+      return;
+    }
+    bootstrap.settled = true;
+    bootstrap.reject(error);
+    this.bootstrap = null;
   }
 
   private startHeartbeat(): void {
@@ -384,7 +446,12 @@ export class RoomConnection {
     const nonce = this.nextPingNonce++;
     this.outstandingPingNonce = nonce;
     this.outstandingPingSentAt = this.clock.now();
-    this.sendSerialized(activeSocket.socket, { type: "ping", nonce });
+    try {
+      this.sendSerialized(activeSocket, { type: "ping", nonce });
+    } catch {
+      // Timer callbacks cannot surface send exceptions; transport recovery is already scheduled.
+      return;
+    }
     this.scheduleHeartbeat(Math.min(this.config.heartbeatIntervalMs, this.config.pongTimeoutMs));
   }
 
@@ -441,12 +508,12 @@ export class RoomConnection {
     }, reconnectDelayMs);
   }
 
-  private sendSerialized(socket: WebSocketLike, message: ClientMessage): void {
+  private sendSerialized(activeSocket: ActiveSocket, message: ClientMessage): void {
     try {
-      socket.send(JSON.stringify(message));
+      activeSocket.socket.send(JSON.stringify(message));
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error("Unable to send WebSocket message");
-      this.reportError(error, true);
+      this.handleTransportFailure(activeSocket.generation, error);
       throw error;
     }
   }

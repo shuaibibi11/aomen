@@ -1,7 +1,11 @@
 import { ROOM_PROTOCOL_VERSION, type ClientMessage } from "@mct/room-protocol";
 import { asActorId, asTableId, type TableSnapshot } from "@mct/shared";
 import { describe, expect, it } from "vitest";
-import { RoomConnection, RoomConnectionUnavailableError } from "./room-connection.js";
+import {
+  JoinRejectedError,
+  RoomConnection,
+  RoomConnectionUnavailableError,
+} from "./room-connection.js";
 import type {
   TimerClock,
   WebSocketFactory,
@@ -28,6 +32,7 @@ class FakeSocket implements WebSocketLike {
   readonly sentMessages: ClientMessage[] = [];
   readyState = 0;
   closeCalls = 0;
+  sendError: Error | null = null;
   private readonly listeners = new Map<SocketEventType, Set<(event: unknown) => void>>();
 
   addEventListener(type: SocketEventType, listener: (event: unknown) => void): void {
@@ -41,6 +46,9 @@ class FakeSocket implements WebSocketLike {
   }
 
   send(data: string): void {
+    if (this.sendError !== null) {
+      throw this.sendError;
+    }
     this.sentMessages.push(JSON.parse(data) as ClientMessage);
   }
 
@@ -196,6 +204,74 @@ describe("RoomConnection", () => {
     expect(states).toEqual(["idle", "connecting", "joining", "connected"]);
   });
 
+  it.each([
+    "unknown_room",
+    "not_joined",
+    "actor_not_allowed",
+    "actor_mismatch",
+    "intent_not_allowed",
+    "malformed_message",
+  ] as const)("rejects bootstrap and stops reconnecting after permanent join error %s", async (code) => {
+    const { connection, sockets, clock } = createHarness();
+    const bootstrapPromise = connection.connect();
+    sockets[0]?.open();
+    sockets[0]?.message({
+      type: "error",
+      code,
+      message: "actor cannot join this room",
+    });
+
+    await expect(bootstrapPromise).rejects.toMatchObject({
+      name: "JoinRejectedError",
+      code,
+    });
+    await expect(bootstrapPromise).rejects.toBeInstanceOf(JoinRejectedError);
+    expect(connection.snapshot.state).toBe("disconnected");
+    expect(sockets[0]?.closeCalls).toBe(1);
+    expect(clock.pendingTaskCount).toBe(0);
+    expect(JSON.stringify(connection.snapshot.lastError)).not.toContain("room-secret");
+  });
+
+  it.each(["room_unavailable", "internal_error"] as const)(
+    "rejects bootstrap but reconnects in the background after transient join error %s",
+    async (code) => {
+      const { connection, sockets, clock } = createHarness();
+      const bootstrapPromise = connection.connect();
+      sockets[0]?.open();
+      sockets[0]?.message({
+        type: "error",
+        code,
+        message: "room is temporarily unavailable",
+      });
+
+      await expect(bootstrapPromise).rejects.toMatchObject({
+        name: "JoinRejectedError",
+        code,
+      });
+      expect(connection.snapshot.state).toBe("reconnecting");
+      expect(clock.nextDelayMs).toBe(500);
+
+      clock.advanceBy(500);
+      expect(sockets).toHaveLength(2);
+      join(sockets[1]!);
+      expect(connection.snapshot.state).toBe("connected");
+    },
+  );
+
+  it("recovers when sending the join message throws without remaining in joining", async () => {
+    const { connection, sockets, clock } = createHarness();
+    const bootstrapPromise = connection.connect();
+    sockets[0]!.sendError = new Error("join send failed");
+
+    expect(() => sockets[0]?.open()).not.toThrow();
+    expect(connection.snapshot.state).toBe("reconnecting");
+    expect(clock.nextDelayMs).toBe(500);
+
+    clock.advanceBy(500);
+    join(sockets[1]!);
+    await expect(bootstrapPromise).resolves.toEqual(snapshot);
+  });
+
   it("sends heartbeat pings and accepts matching pongs without reconnecting", () => {
     const { connection, sockets, clock } = createHarness();
     void connection.connect();
@@ -210,6 +286,32 @@ describe("RoomConnection", () => {
 
     expect(sockets).toHaveLength(1);
     expect(connection.snapshot.state).toBe("connected");
+  });
+
+  it.each([0, 2])("does not clear a pong timeout for non-matching nonce %s", (nonce) => {
+    const { connection, sockets, clock } = createHarness();
+    void connection.connect();
+    join(sockets[0]!);
+
+    clock.advanceBy(1_000);
+    sockets[0]?.message({ type: "pong", nonce });
+    expect(connection.snapshot.lastPongAt).toBeNull();
+    clock.advanceBy(1_500);
+
+    expect(connection.snapshot.state).toBe("reconnecting");
+    expect(sockets[0]?.closeCalls).toBe(1);
+  });
+
+  it("recovers from heartbeat send failures without throwing from its timer", () => {
+    const { connection, sockets, clock } = createHarness();
+    void connection.connect();
+    join(sockets[0]!);
+    sockets[0]!.sendError = new Error("heartbeat send failed");
+
+    expect(() => clock.advanceBy(1_000)).not.toThrow();
+    expect(connection.snapshot.state).toBe("reconnecting");
+    expect(sockets[0]?.closeCalls).toBe(1);
+    expect(clock.nextDelayMs).toBe(500);
   });
 
   it("closes an unresponsive socket and reconnects after backoff", () => {
@@ -300,6 +402,22 @@ describe("RoomConnection", () => {
     void connection.connect();
     sockets[0]?.open();
     expect(() => connection.sendClientMessage({ type: "ping", nonce: 9 })).toThrow(RoomConnectionUnavailableError);
+  });
+
+  it("rejects an application send with its original error and reconnects", async () => {
+    const { connection, sockets, clock } = createHarness();
+    void connection.connect();
+    join(sockets[0]!);
+    const sendError = new Error("socket send failed");
+    sockets[0]!.sendError = sendError;
+
+    await expect(connection.submitIntent({
+      type: "start_round",
+      actorId: asActorId("human-1"),
+    })).rejects.toBe(sendError);
+    expect(connection.snapshot.state).toBe("reconnecting");
+    expect(sockets[0]?.closeCalls).toBe(1);
+    expect(clock.nextDelayMs).toBe(500);
   });
 
   it("reports malformed messages, reconnects, and keeps listener delivery isolated", () => {
