@@ -19,7 +19,7 @@
  * onto.
  */
 import * as THREE from "three";
-import type { BetKind, TableEvent } from "@mct/shared";
+import type { BetKind } from "@mct/shared";
 import type { CasinoId, CasinoTheme } from "../specs/casino-theme.js";
 import { CARD_SIZE, CHIP_SIZE, millimetresToMetres } from "../specs/dimensions.js";
 import {
@@ -33,7 +33,7 @@ import {
 import { createCardModel } from "../models/card.js";
 import { createChipStack } from "../models/chip.js";
 import type { CardRank, CardSuit } from "../textures/card-textures.js";
-import { TableSession } from "../session/table-session.js";
+import type { TableSession, TableSessionUnsubscribe } from "../session/table-session.js";
 
 /**
  * Where the dealt hands sit, as offsets from the table centre in metres.
@@ -54,6 +54,7 @@ export interface BetAttempt {
 }
 
 export interface BetInteractionOptions {
+  readonly session: TableSession;
   readonly theme: CasinoTheme;
   readonly casinoId: CasinoId;
   readonly variant: TableVariant;
@@ -61,8 +62,8 @@ export interface BetInteractionOptions {
   readonly surfaceY: number;
   /** Called after every click that landed on a betting spot. */
   readonly onBetAttempt?: (attempt: BetAttempt) => void;
-  /** Called whenever the engine state changed and the UI should re-read it. */
-  readonly onStateChanged?: () => void;
+  /** Called when command pending state changes. */
+  readonly onPendingChanged?: (pending: boolean) => void;
 }
 
 /**
@@ -74,6 +75,7 @@ export interface BetInteractionOptions {
  */
 export class BetInteraction {
   private readonly session: TableSession;
+  private readonly unsubscribeSession: TableSessionUnsubscribe;
   private readonly seatPlacements: readonly SeatPlacement[];
   private readonly betChipGroup = new THREE.Group();
   private readonly dealtCardGroup = new THREE.Group();
@@ -82,9 +84,10 @@ export class BetInteraction {
 
   private feltMesh: THREE.Mesh | null = null;
   private selectedDenomination: number;
+  private commandPending = false;
 
   constructor(private readonly options: BetInteractionOptions) {
-    this.session = new TableSession({ variant: options.variant });
+    this.session = options.session;
     this.seatPlacements = computeSeatPlacements(options.variant);
     this.betChipGroup.name = "engine-bet-chips";
     this.betChipGroup.position.y = options.surfaceY;
@@ -97,6 +100,9 @@ export class BetInteraction {
       denominations.find(
         (value) => value >= this.session.getRulePack().limits.min,
       ) ?? this.session.getRulePack().limits.min;
+    this.unsubscribeSession = this.session.subscribe(() => {
+      this.refreshFromSnapshot();
+    });
   }
 
   /** The group holding the chips that represent live engine bets. */
@@ -121,6 +127,10 @@ export class BetInteraction {
     this.selectedDenomination = denomination;
   }
 
+  isPending(): boolean {
+    return this.commandPending;
+  }
+
   /**
    * Point the interaction at the felt mesh of the table currently in the scene.
    * Called after the table is rebuilt, since a rebuild replaces the mesh.
@@ -135,11 +145,11 @@ export class BetInteraction {
    * Resolve a pointer event to a betting spot and submit it to the engine.
    * Returns null when the click did not land on a spot.
    */
-  handlePointerDown(
+  async handlePointerDown(
     event: PointerEvent,
     canvas: HTMLCanvasElement,
     camera: THREE.Camera,
-  ): BetAttempt | null {
+  ): Promise<BetAttempt | null> {
     if (this.feltMesh === null) {
       return null;
     }
@@ -178,49 +188,60 @@ export class BetInteraction {
     return this.placeBetAtSpot(spotHit);
   }
 
-  /** Submit a bet for a resolved spot and refresh what the cloth shows. */
-  placeBetAtSpot(hit: BetSpotHit): BetAttempt {
-    const amount = this.selectedDenomination;
-    const event: TableEvent = this.session.placeBet(
-      hit.seatLabel,
-      hit.spotId as BetKind,
-      amount,
-    );
-
-    const attempt: BetAttempt = {
-      hit,
-      amount,
-      accepted: event.accepted ?? false,
-      rejectReason: event.rejectReason ?? null,
-    };
-
-    if (attempt.accepted) {
-      this.refreshFromSnapshot();
+  /** Submit a bet and wait for its authoritative session update. */
+  async placeBetAtSpot(hit: BetSpotHit): Promise<BetAttempt | null> {
+    if (this.commandPending) {
+      return null;
     }
-    this.options.onBetAttempt?.(attempt);
-    this.options.onStateChanged?.();
-    return attempt;
+    this.setCommandPending(true);
+    const amount = this.selectedDenomination;
+    try {
+      const event = await this.session.placeBet(
+        hit.seatLabel,
+        hit.spotId as BetKind,
+        amount,
+      );
+      const attempt: BetAttempt = {
+        hit,
+        amount,
+        accepted: event.accepted ?? false,
+        rejectReason: event.rejectReason ?? null,
+      };
+      this.options.onBetAttempt?.(attempt);
+      return attempt;
+    } finally {
+      this.setCommandPending(false);
+    }
   }
 
   /** Clear every bet at one printed seat. */
-  clearSeatBets(seatLabel: number): void {
-    this.session.clearBets(seatLabel);
-    this.refreshFromSnapshot();
-    this.options.onStateChanged?.();
+  async clearSeatBets(seatLabel: number): Promise<void> {
+    await this.runCommand(() => this.session.clearBets(seatLabel));
   }
 
   /** Close betting, deal the hand out and settle it. */
-  playRoundToSettlement(): void {
-    this.session.dealAndSettle();
-    this.refreshFromSnapshot();
-    this.options.onStateChanged?.();
+  async playRoundToSettlement(): Promise<void> {
+    await this.runCommand(async () => {
+      if (this.session.getSnapshot().phase === "round_betting") {
+        await this.session.closeBetting();
+      }
+      const maximumCards = 6;
+      let cardsDealt = 0;
+      await this.session.dealNext();
+      while (this.session.getSnapshot().phase === "dealing") {
+        await this.session.dealNext();
+        cardsDealt += 1;
+        if (cardsDealt > maximumCards) {
+          throw new Error("deal did not reach settling within six cards");
+        }
+      }
+      await this.session.settleRound();
+    });
   }
 
   /** Open the next round, which also clears the cloth. */
-  startNextRound(): void {
-    this.session.startRound();
-    this.refreshFromSnapshot();
-    this.options.onStateChanged?.();
+  async startNextRound(): Promise<void> {
+    await this.runCommand(() => this.session.startRound());
   }
 
   /**
@@ -347,8 +368,26 @@ export class BetInteraction {
 
   /** Release GPU resources when the mode changes away from a table. */
   dispose(): void {
+    this.unsubscribeSession();
     this.disposeBetChips();
     this.disposeDealtCards();
+  }
+
+  private async runCommand(command: () => Promise<unknown>): Promise<void> {
+    if (this.commandPending) {
+      return;
+    }
+    this.setCommandPending(true);
+    try {
+      await command();
+    } finally {
+      this.setCommandPending(false);
+    }
+  }
+
+  private setCommandPending(pending: boolean): void {
+    this.commandPending = pending;
+    this.options.onPendingChanged?.(pending);
   }
 }
 

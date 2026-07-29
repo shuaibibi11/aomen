@@ -1,5 +1,5 @@
 /**
- * Table session tests.
+ * Local table session tests.
  *
  * These check the part that is genuinely new: the translation between printed
  * seat numbers and engine seat identities, and that a click really does reach
@@ -8,11 +8,12 @@
  */
 import { describe, expect, it } from "vitest";
 import { validateRulePack } from "@mct/rule-packs/validate";
-import { DEV_RULE_PACK, TableSession } from "./table-session.js";
+import { DEV_RULE_PACK } from "./dev-rule-pack.js";
+import { LocalTableSession } from "./local-table-session.js";
 import { getSeatLabels } from "../specs/table-layout.js";
 
-function openSession(): TableSession {
-  return new TableSession({ variant: "mass" });
+function openSession(): LocalTableSession {
+  return new LocalTableSession({ variant: "mass" });
 }
 
 /**
@@ -70,7 +71,7 @@ describe("seat mapping", () => {
   });
 
   it("gives the VIP variant its own seat numbering", () => {
-    const session = new TableSession({ variant: "vip" });
+    const session = new LocalTableSession({ variant: "vip" });
     expect(session.getSeats().map((seat) => seat.label)).toEqual([
       ...getSeatLabels("vip"),
     ]);
@@ -88,7 +89,7 @@ describe("seat mapping", () => {
   });
 
   it("honours a requested guest seat", () => {
-    const session = new TableSession({ variant: "mass", guestSeatLabel: 1 });
+    const session = new LocalTableSession({ variant: "mass", guestSeatLabel: 1 });
     expect(session.getGuestSeat().label).toBe(1);
   });
 });
@@ -116,9 +117,9 @@ describe("opening a session", () => {
 });
 
 describe("placing a bet from a click", () => {
-  it("is accepted at the table minimum", () => {
+  it("is accepted at the table minimum", async () => {
     const session = openSession();
-    const event = session.placeBet(
+    const event = await session.placeBet(
       session.getGuestSeat().label,
       "player",
       DEV_RULE_PACK.limits.min,
@@ -126,10 +127,10 @@ describe("placing a bet from a click", () => {
     expect(event.accepted).toBe(true);
   });
 
-  it("shows up in the snapshot against the clicked seat and spot", () => {
+  it("shows up in the snapshot against the clicked seat and spot", async () => {
     const session = openSession();
     const seatLabel = session.getGuestSeat().label;
-    session.placeBet(seatLabel, "banker", DEV_RULE_PACK.limits.min);
+    await session.placeBet(seatLabel, "banker", DEV_RULE_PACK.limits.min);
 
     expect(session.getBetAmount(seatLabel, "banker")).toBe(
       DEV_RULE_PACK.limits.min,
@@ -137,7 +138,7 @@ describe("placing a bet from a click", () => {
     expect(session.getBetAmount(seatLabel, "player")).toBe(0);
   });
 
-  it("keeps two seats' bets apart", () => {
+  it("keeps two seats' bets apart", async () => {
     const session = openSession();
     const [firstSeat, secondSeat] = session.getSeats();
     expect(firstSeat).toBeDefined();
@@ -146,8 +147,8 @@ describe("placing a bet from a click", () => {
       return;
     }
 
-    session.placeBet(firstSeat.label, "player", DEV_RULE_PACK.limits.min);
-    session.placeBet(secondSeat.label, "tie", DEV_RULE_PACK.limits.min * 2);
+    await session.placeBet(firstSeat.label, "player", DEV_RULE_PACK.limits.min);
+    await session.placeBet(secondSeat.label, "tie", DEV_RULE_PACK.limits.min * 2);
 
     expect(session.getBetAmount(firstSeat.label, "player")).toBe(
       DEV_RULE_PACK.limits.min,
@@ -158,33 +159,33 @@ describe("placing a bet from a click", () => {
     expect(session.getBetAmount(firstSeat.label, "tie")).toBe(0);
   });
 
-  it("accepts the pair side bets, so the spot ids line up with the engine", () => {
+  it("accepts the pair side bets, so the spot ids line up with the engine", async () => {
     const session = openSession();
     const seatLabel = session.getGuestSeat().label;
 
     expect(
-      session.placeBet(seatLabel, "player_pair", DEV_RULE_PACK.limits.min).accepted,
+      (await session.placeBet(seatLabel, "player_pair", DEV_RULE_PACK.limits.min)).accepted,
     ).toBe(true);
     expect(
-      session.placeBet(seatLabel, "banker_pair", DEV_RULE_PACK.limits.min).accepted,
+      (await session.placeBet(seatLabel, "banker_pair", DEV_RULE_PACK.limits.min)).accepted,
     ).toBe(true);
   });
 
-  it("locks the stake out of the seat's stack", () => {
+  it("locks the stake out of the seat's stack", async () => {
     const session = openSession();
     const seatLabel = session.getGuestSeat().label;
     const stackBefore = session.getStack(seatLabel);
 
-    session.placeBet(seatLabel, "player", DEV_RULE_PACK.limits.min);
+    await session.placeBet(seatLabel, "player", DEV_RULE_PACK.limits.min);
 
     expect(session.getStack(seatLabel)).toBe(
       stackBefore - DEV_RULE_PACK.limits.min,
     );
   });
 
-  it("rejects a stake below the table minimum", () => {
+  it("rejects a stake below the table minimum", async () => {
     const session = openSession();
-    const event = session.placeBet(
+    const event = await session.placeBet(
       session.getGuestSeat().label,
       "player",
       DEV_RULE_PACK.limits.min - 1,
@@ -193,9 +194,9 @@ describe("placing a bet from a click", () => {
     expect(event.rejectReason).toBe("bet_below_minimum");
   });
 
-  it("rejects a stake above the table maximum", () => {
+  it("rejects a stake above the table maximum", async () => {
     const session = openSession();
-    const event = session.placeBet(
+    const event = await session.placeBet(
       session.getGuestSeat().label,
       "player",
       DEV_RULE_PACK.limits.max + 1,
@@ -204,10 +205,10 @@ describe("placing a bet from a click", () => {
     expect(event.rejectReason).toBe("bet_above_maximum");
   });
 
-  it("rejects a bet once betting has closed", () => {
+  it("rejects a bet once betting has closed", async () => {
     const session = openSession();
-    session.closeBetting();
-    const event = session.placeBet(
+    await session.closeBetting();
+    const event = await session.placeBet(
       session.getGuestSeat().label,
       "player",
       DEV_RULE_PACK.limits.min,
@@ -216,18 +217,18 @@ describe("placing a bet from a click", () => {
     expect(event.rejectReason).toBe("wrong_phase");
   });
 
-  it("throws for a seat number that is not printed on this table", () => {
+  it("throws for a seat number that is not printed on this table", async () => {
     const session = openSession();
-    expect(() => session.placeBet(99, "player", DEV_RULE_PACK.limits.min)).toThrow();
+    await expect(session.placeBet(99, "player", DEV_RULE_PACK.limits.min)).rejects.toThrow();
   });
 
-  it("returns the stake when bets are cleared", () => {
+  it("returns the stake when bets are cleared", async () => {
     const session = openSession();
     const seatLabel = session.getGuestSeat().label;
     const stackBefore = session.getStack(seatLabel);
 
-    session.placeBet(seatLabel, "player", DEV_RULE_PACK.limits.min);
-    session.clearBets(seatLabel);
+    await session.placeBet(seatLabel, "player", DEV_RULE_PACK.limits.min);
+    await session.clearBets(seatLabel);
 
     expect(session.getStack(seatLabel)).toBe(stackBefore);
     expect(session.getBetAmount(seatLabel, "player")).toBe(0);
@@ -235,23 +236,23 @@ describe("placing a bet from a click", () => {
 });
 
 describe("playing a round through to settlement", () => {
-  it("reaches a settled outcome", () => {
+  it("reaches a settled outcome", async () => {
     const session = openSession();
-    session.placeBet(
+    await session.placeBet(
       session.getGuestSeat().label,
       "player",
       DEV_RULE_PACK.limits.min,
     );
-    session.dealAndSettle();
+    await session.dealAndSettle();
 
     const snapshot = session.getSnapshot();
     expect(snapshot.phase).toBe("round_end");
     expect(["player", "banker", "tie"]).toContain(snapshot.outcome);
   });
 
-  it("deals at least the four opening cards", () => {
+  it("deals at least the four opening cards", async () => {
     const session = openSession();
-    session.dealAndSettle();
+    await session.dealAndSettle();
 
     const hands = session.getSnapshot().hands;
     expect(hands.player.length).toBeGreaterThanOrEqual(2);
@@ -259,44 +260,44 @@ describe("playing a round through to settlement", () => {
     expect(hands.player.length + hands.banker.length).toBeGreaterThanOrEqual(4);
   });
 
-  it("never exceeds three cards per hand", () => {
+  it("never exceeds three cards per hand", async () => {
     const session = openSession();
-    session.dealAndSettle();
+    await session.dealAndSettle();
 
     const hands = session.getSnapshot().hands;
     expect(hands.player.length).toBeLessThanOrEqual(3);
     expect(hands.banker.length).toBeLessThanOrEqual(3);
   });
 
-  it("pays a winning bet back into the stack", () => {
+  it("pays a winning bet back into the stack", async () => {
     const session = openSession();
     const seatLabel = session.getGuestSeat().label;
     const stake = DEV_RULE_PACK.limits.min;
 
     // Bet every main outcome, so whichever wins pays something back.
-    session.placeBet(seatLabel, "player", stake);
-    session.placeBet(seatLabel, "banker", stake);
-    session.placeBet(seatLabel, "tie", stake);
+    await session.placeBet(seatLabel, "player", stake);
+    await session.placeBet(seatLabel, "banker", stake);
+    await session.placeBet(seatLabel, "tie", stake);
 
     const stackAfterBetting = session.getStack(seatLabel);
-    session.dealAndSettle();
+    await session.dealAndSettle();
 
     expect(session.getStack(seatLabel)).toBeGreaterThan(stackAfterBetting);
   });
 
-  it("produces the same outcome for the same shoe seed", () => {
-    const playOneRound = (): string | null => {
-      const session = new TableSession({ variant: "mass", shoeSeed: "fixed-seed" });
-      session.dealAndSettle();
+  it("produces the same outcome for the same shoe seed", async () => {
+    const playOneRound = async (): Promise<string | null> => {
+      const session = new LocalTableSession({ variant: "mass", shoeSeed: "fixed-seed" });
+      await session.dealAndSettle();
       return session.getSnapshot().outcome;
     };
-    expect(playOneRound()).toBe(playOneRound());
+    expect(await playOneRound()).toBe(await playOneRound());
   });
 
-  it("can open the next round after settling", () => {
+  it("can open the next round after settling", async () => {
     const session = openSession();
-    session.dealAndSettle();
-    session.startRound();
+    await session.dealAndSettle();
+    await session.startRound();
 
     const snapshot = session.getSnapshot();
     expect(snapshot.phase).toBe("round_betting");

@@ -125,12 +125,18 @@ function wireBettingPanel(previewApp: PreviewApp): void {
   const actionContainer = requireElement("round-actions");
   const feedback = requireElement("bet-feedback");
   const stateReadout = requireElement("table-state-readout");
+  const actionButtons: HTMLButtonElement[] = [];
 
   const refreshPanel = (): void => {
     const session = previewApp.getBetSession();
     panel.hidden = session === null;
     if (session === null) {
       return;
+    }
+
+    const commandPending = previewApp.isTableCommandPending();
+    for (const actionButton of actionButtons) {
+      actionButton.disabled = commandPending;
     }
 
     const snapshot = session.getSnapshot();
@@ -167,7 +173,7 @@ function wireBettingPanel(previewApp: PreviewApp): void {
     (value) => previewApp.setSelectedDenomination(Number(value)),
   );
 
-  const actions: ReadonlyArray<{ label: string; run: () => void }> = [
+  const actions: ReadonlyArray<{ label: string; run: () => Promise<void> }> = [
     { label: "停止下注並發牌", run: () => previewApp.playRoundToSettlement() },
     { label: "開下一局", run: () => previewApp.startNextRound() },
     { label: "清除本座注", run: () => previewApp.clearGuestSeatBets() },
@@ -176,15 +182,16 @@ function wireBettingPanel(previewApp: PreviewApp): void {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = action.label;
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       try {
-        action.run();
+        await action.run();
       } catch (error) {
         feedback.textContent = error instanceof Error
           ? error.message
           : "動作失敗";
       }
     });
+    actionButtons.push(button);
     actionContainer.append(button);
   }
 

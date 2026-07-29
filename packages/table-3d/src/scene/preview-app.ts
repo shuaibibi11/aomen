@@ -40,7 +40,15 @@ import {
 } from "../specs/table-layout.js";
 import { buildTableViews, type TableViewId } from "../specs/table-views.js";
 import { BetInteraction, type BetAttempt } from "./bet-interaction.js";
-import type { TableSession } from "../session/table-session.js";
+import type {
+  TableSession,
+  TableSessionFactory,
+  TableSessionUnsubscribe,
+} from "../session/table-session.js";
+import {
+  createLocalTableSession,
+  TableSessionController,
+} from "../session/session-factory.js";
 import { TABLE_FOOTPRINT } from "../models/table-body.js";
 import {
   createMemberCardSet,
@@ -121,10 +129,18 @@ export class PreviewApp {
    * one.
    */
   private betInteraction: BetInteraction | null = null;
+  private readonly sessionController: TableSessionController;
+  private unsubscribeTableSession: TableSessionUnsubscribe | null = null;
+  private contentBuildSequence = 0;
+  private tableCommandPending = false;
   private onBetAttempt: ((attempt: BetAttempt) => void) | null = null;
   private onTableStateChanged: (() => void) | null = null;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    sessionFactory: TableSessionFactory = createLocalTableSession,
+  ) {
+    this.sessionController = new TableSessionController(sessionFactory);
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,
@@ -246,6 +262,11 @@ export class PreviewApp {
   }
 
   private rebuildContent(): void {
+    void this.rebuildContentAsync();
+  }
+
+  private async rebuildContentAsync(): Promise<void> {
+    const contentBuildSequence = ++this.contentBuildSequence;
     this.disposeContent();
 
     const theme = this.activeTheme;
@@ -256,6 +277,11 @@ export class PreviewApp {
     }
 
     if (TABLE_MODE_VARIANTS[this.activeMode] === undefined) {
+      this.betInteraction?.dispose();
+      this.betInteraction = null;
+      this.unsubscribeTableSession?.();
+      this.unsubscribeTableSession = null;
+      this.sessionController.dispose();
       this.applyPropLighting();
     }
 
@@ -291,10 +317,10 @@ export class PreviewApp {
         this.buildRoadmap(theme);
         break;
       case "table-mass":
-        this.buildFullTable(theme, "mass");
+        await this.buildFullTable(theme, "mass", contentBuildSequence);
         break;
       case "table-vip":
-        this.buildFullTable(theme, "vip");
+        await this.buildFullTable(theme, "vip", contentBuildSequence);
         break;
     }
 
@@ -491,7 +517,15 @@ export class PreviewApp {
    * on the cloth have to come from the snapshot, otherwise the table would show
    * stakes that no runtime is holding.
    */
-  private buildFullTable(theme: CasinoTheme, variant: TableVariant): void {
+  private async buildFullTable(
+    theme: CasinoTheme,
+    variant: TableVariant,
+    contentBuildSequence: number,
+  ): Promise<void> {
+    const session = await this.sessionController.open({ variant });
+    if (session === null || contentBuildSequence !== this.contentBuildSequence) {
+      return;
+    }
     const table = createBaccaratTable({
       theme,
       casinoId: this.activeCasinoId,
@@ -502,13 +536,14 @@ export class PreviewApp {
 
     this.betInteraction?.dispose();
     const interaction = new BetInteraction({
+      session,
       theme,
       casinoId: this.activeCasinoId,
       variant,
       surfaceY: TABLE_FOOTPRINT.surfaceY,
       onBetAttempt: (attempt) => this.onBetAttempt?.(attempt),
-      onStateChanged: () => {
-        this.updateInfoPanel();
+      onPendingChanged: (pending) => {
+        this.tableCommandPending = pending;
         this.onTableStateChanged?.();
       },
     });
@@ -516,6 +551,11 @@ export class PreviewApp {
     table.add(interaction.chipGroup);
     table.add(interaction.cardGroup);
     this.betInteraction = interaction;
+    this.unsubscribeTableSession?.();
+    this.unsubscribeTableSession = session.subscribe(() => {
+      this.updateInfoPanel();
+      this.onTableStateChanged?.();
+    });
 
     // The prop-preview felt disc would intersect the table legs.
     if (this.feltMesh !== null) {
@@ -587,7 +627,6 @@ export class PreviewApp {
     this.rebuildContent();
     // Tier counts differ per casino, so the member-card row changes width.
     this.frameActiveContent();
-    this.onTableStateChanged?.();
   }
 
   setMode(mode: PreviewMode): void {
@@ -650,22 +689,26 @@ export class PreviewApp {
   }
 
   /** Close betting, deal the hand to completion and settle it. */
-  playRoundToSettlement(): void {
-    this.betInteraction?.playRoundToSettlement();
+  async playRoundToSettlement(): Promise<void> {
+    await this.betInteraction?.playRoundToSettlement();
   }
 
   /** Open the next round, clearing the cloth. */
-  startNextRound(): void {
-    this.betInteraction?.startNextRound();
+  async startNextRound(): Promise<void> {
+    await this.betInteraction?.startNextRound();
   }
 
   /** Take back every bet the guest has placed this round. */
-  clearGuestSeatBets(): void {
+  async clearGuestSeatBets(): Promise<void> {
     const session = this.getBetSession();
     if (session === null) {
       return;
     }
-    this.betInteraction?.clearSeatBets(session.getGuestSeat().label);
+    await this.betInteraction?.clearSeatBets(session.getGuestSeat().label);
+  }
+
+  isTableCommandPending(): boolean {
+    return this.tableCommandPending;
   }
 
   /** Report the outcome of each click that landed on a betting spot. */
