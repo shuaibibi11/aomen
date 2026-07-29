@@ -83,8 +83,13 @@ export function createTableSessionNotifier(
         return;
       }
       const snapshot = getSnapshot();
-      if (snapshot.lastEventSeq === lastPublishedSequence) {
+      if (snapshot.lastEventSeq <= lastPublishedSequence) {
         return;
+      }
+      if (event.seq !== snapshot.lastEventSeq) {
+        throw new Error(
+          `Table session update sequence mismatch: event ${event.seq}, snapshot ${snapshot.lastEventSeq}`,
+        );
       }
       lastPublishedSequence = snapshot.lastEventSeq;
       const update = { event, snapshot };

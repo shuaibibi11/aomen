@@ -275,65 +275,86 @@ export class PreviewApp {
 
   private async rebuildContentAsync(): Promise<void> {
     const contentBuildSequence = ++this.contentBuildSequence;
-    this.disposeContent();
 
-    const theme = this.activeTheme;
-    if (this.feltMesh !== null) {
-      (this.feltMesh.material as THREE.MeshStandardMaterial).color.set(
-        theme.palette.feltMain,
-      );
+    try {
+      this.disableTableInteraction();
+      this.disposeContent();
+      const theme = this.activeTheme;
+      if (this.feltMesh !== null) {
+        (this.feltMesh.material as THREE.MeshStandardMaterial).color.set(
+          theme.palette.feltMain,
+        );
+      }
+
+      if (TABLE_MODE_VARIANTS[this.activeMode] === undefined) {
+        this.sessionController.dispose();
+        this.applyPropLighting();
+      }
+
+      switch (this.activeMode) {
+        case "chip-set":
+          this.buildChipSet(theme);
+          break;
+        case "chip-stacks":
+          this.buildChipStacks(theme);
+          break;
+        case "plaque-set":
+          this.buildPlaqueSet(theme);
+          break;
+        case "chip-tray":
+          this.buildChipTray(theme);
+          break;
+        case "member-cards":
+          this.buildMemberCards(theme);
+          break;
+        case "card-faces":
+          this.buildCardFaces(theme);
+          break;
+        case "dealt-hand":
+          this.buildDealtHand(theme);
+          break;
+        case "dealing-shoe":
+          this.buildDealingShoe(theme);
+          break;
+        case "dealer-station":
+          this.buildDealerStation(theme);
+          break;
+        case "roadmap":
+          this.buildRoadmap(theme);
+          break;
+        case "table-mass":
+          await this.buildFullTable(theme, "mass", contentBuildSequence);
+          break;
+        case "table-vip":
+          await this.buildFullTable(theme, "vip", contentBuildSequence);
+          break;
+      }
+
+      if (contentBuildSequence === this.contentBuildSequence) {
+        this.updateInfoPanel();
+      }
+    } catch (error) {
+      if (contentBuildSequence !== this.contentBuildSequence) {
+        return;
+      }
+      try {
+        this.disableTableInteraction();
+        this.disposeContent();
+      } catch {
+        // Preserve and report the original rebuild failure after best-effort cleanup.
+      }
+      this.onCommandError?.(error);
+      this.onTableStateChanged?.();
     }
+  }
 
-    if (TABLE_MODE_VARIANTS[this.activeMode] === undefined) {
-      this.betInteraction?.dispose();
-      this.betInteraction = null;
-      this.tableCommandPending = false;
-      this.unsubscribeTableSession?.();
-      this.unsubscribeTableSession = null;
-      this.sessionController.dispose();
-      this.applyPropLighting();
-    }
-
-    switch (this.activeMode) {
-      case "chip-set":
-        this.buildChipSet(theme);
-        break;
-      case "chip-stacks":
-        this.buildChipStacks(theme);
-        break;
-      case "plaque-set":
-        this.buildPlaqueSet(theme);
-        break;
-      case "chip-tray":
-        this.buildChipTray(theme);
-        break;
-      case "member-cards":
-        this.buildMemberCards(theme);
-        break;
-      case "card-faces":
-        this.buildCardFaces(theme);
-        break;
-      case "dealt-hand":
-        this.buildDealtHand(theme);
-        break;
-      case "dealing-shoe":
-        this.buildDealingShoe(theme);
-        break;
-      case "dealer-station":
-        this.buildDealerStation(theme);
-        break;
-      case "roadmap":
-        this.buildRoadmap(theme);
-        break;
-      case "table-mass":
-        await this.buildFullTable(theme, "mass", contentBuildSequence);
-        break;
-      case "table-vip":
-        await this.buildFullTable(theme, "vip", contentBuildSequence);
-        break;
-    }
-
-    this.updateInfoPanel();
+  /** Disable all command paths before an asynchronous replacement can begin. */
+  private disableTableInteraction(): void {
+    this.betInteraction?.dispose();
+    this.betInteraction = null;
+    this.unsubscribeTableSession?.();
+    this.unsubscribeTableSession = null;
+    this.tableCommandPending = false;
   }
 
   /** All denominations laid out flat in a row, face up. */

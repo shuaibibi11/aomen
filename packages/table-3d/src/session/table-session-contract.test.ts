@@ -99,4 +99,29 @@ describe("table session notifier", () => {
 
     expect(listener).toHaveBeenCalledTimes(1);
   });
+
+  it("does not publish a snapshot older than the latest published sequence", () => {
+    let snapshot = { lastEventSeq: 42 } as TableSnapshot;
+    const listener = vi.fn();
+    const notifier = createTableSessionNotifier(() => snapshot);
+    notifier.subscribe(listener);
+
+    notifier.publish({ seq: 42 } as TableEvent);
+    snapshot = { lastEventSeq: 41 } as TableSnapshot;
+    notifier.publish({ seq: 41 } as TableEvent);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws a clear error when an event and its snapshot sequence differ", () => {
+    const snapshot = { lastEventSeq: 42 } as TableSnapshot;
+    const listener = vi.fn();
+    const notifier = createTableSessionNotifier(() => snapshot);
+    notifier.subscribe(listener);
+
+    expect(() => notifier.publish({ seq: 43 } as TableEvent)).toThrow(
+      "Table session update sequence mismatch: event 43, snapshot 42",
+    );
+    expect(listener).not.toHaveBeenCalled();
+  });
 });
