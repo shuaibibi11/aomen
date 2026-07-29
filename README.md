@@ -1,0 +1,137 @@
+# 澳门赌场训练系统
+
+这是一个面向澳门百家乐桌面训练的 TypeScript monorepo。当前仓库提供可重复的百家乐规则引擎、训练币账本、内存房间服务、WebSocket 协议与客户端，以及可交互的 Three.js 牌桌演示。
+
+> **合规声明：** 本项目只用于教学、规则验证和软件研发，不提供真钱下注、支付、兑奖或赌博运营能力。演示筹码没有现金价值。部署者仍须自行遵守所在地法律、隐私和信息安全要求。
+
+## 当前状态
+
+截至 2026-07-29，Phase 0-1 的 Task 1-11 已实现并通过最终仓库验收；后续 Socket + AI 切片也已合入本分支。当前可用能力包括：
+
+- 标准与免佣百家乐主流程、第三张规则、主注与对子边注赔付、种子牌靴和训练币账本；
+- 权威 `TableRuntime`、内存事件流、单真人参与者加基础 AI 的演示房间；
+- 带认证 join、消息校验、幂等恢复、心跳和重连的 WebSocket 远端会话；
+- 默认本地运行的交互式 Three.js 牌桌、点击下注、发牌和筹码/牌面渲染；
+- 已工作的 Basic AI，以及可注入、provider-neutral 的 LLM 决策边界和安全回退。
+
+LLM 边界目前**没有接入任何具体供应商 SDK**。远端会话默认关闭，浏览器演示默认使用进程内 local session。详细基线和提交范围见 [当前进度](docs/development/current-progress.md)。
+
+## Monorepo 架构
+
+| 路径 | 职责 |
+| --- | --- |
+| `packages/shared` | Card、ID、Intent、Event、Snapshot 等共享类型 |
+| `packages/rule-packs` | 版本化规则包 schema、校验、加载和开发示例 |
+| `packages/table-engine` | 纯 TypeScript 权威桌面状态机、牌靴、赔付和账本 |
+| `packages/room-protocol` | WebSocket 客户端/服务端消息契约与运行时校验 |
+| `packages/room-client` | 浏览器 WebSocket 连接、心跳、重连和请求关联 |
+| `packages/table-3d` | Three.js 资产、牌桌预览、本地/远端 session 适配 |
+| `apps/server` | 房间管理、自动回合、Basic/LLM AI 边界、内存事件库和 WS gateway |
+
+## 环境与安装
+
+- Node.js `>=20`（最终验收使用 `v22.17.0`）
+- pnpm `10.29.3`（以根 `package.json#packageManager` 为准）
+
+```powershell
+Set-Location "E:\path\to\macau-casino-training"
+pnpm install --frozen-lockfile
+```
+
+工作区包的运行时入口指向 `dist`。全新 clone/install 后应先执行 `pnpm build`，再执行依赖这些入口的 `pnpm test` 或 `pnpm typecheck`。
+
+## 验证命令
+
+```powershell
+Set-Location "E:\path\to\macau-casino-training"
+pnpm build
+pnpm test
+pnpm typecheck
+```
+
+常用聚焦测试：
+
+```powershell
+pnpm --filter @mct/server test
+pnpm --filter @mct/table-3d test
+pnpm --filter @mct/room-client test
+pnpm --filter @mct/room-protocol test
+```
+
+## 启动演示 Server
+
+Server 要求显式提供演示房间 credential。只使用临时开发值，不要将真实 secret 写入仓库：
+
+```powershell
+Set-Location "E:\path\to\macau-casino-training"
+$env:DEMO_ROOM_CREDENTIAL = "replace-with-a-temporary-development-value"
+$env:PORT = "8787"
+pnpm --filter @mct/server start
+```
+
+默认演示配置：
+
+- table：`demo-table`
+- human actor：`demo-human`
+- seats：7
+- AI actors：2 个 Basic AI
+- rule pack：`dev/generic-macau-baccarat.v1.json`
+- WebSocket：`ws://127.0.0.1:8787`（按实际 host/port 调整）
+
+## 启动 table-3d
+
+```powershell
+Set-Location "E:\path\to\macau-casino-training"
+pnpm --filter @mct/table-3d dev
+```
+
+不提供配置时，table-3d 使用 local session，不连接 server，也不需要 credential。
+
+### 受信内存配置启用 remote session
+
+远端配置必须由受信任的启动代码写入内存；下面只展示占位值，不能放真实 secret：
+
+```html
+<script>
+  globalThis.__MCT_ROOM_CONFIG__ = Object.freeze({
+    runtime: "remote",
+    wsUrl: "ws://127.0.0.1:8787",
+    tableId: "demo-table",
+    actorId: "demo-human",
+    credential: "inject-at-runtime-not-a-real-secret"
+  });
+</script>
+```
+
+该对象必须在应用模块加载前写入。不要通过 URL/query string 传 credential；不要将 credential 打入日志，也不要写入 localStorage、sessionStorage、IndexedDB 或其他持久化存储。实现会忽略 URL 中的远端 endpoint、身份与 credential，避免不受信链接改变信任单元。
+
+## 最终测试矩阵（2026-07-29）
+
+| 范围 | 结果 |
+| --- | ---: |
+| 全仓 `pnpm test` | 35 files / 507 tests passed |
+| `@mct/server` | 11 files / 142 tests passed |
+| `@mct/table-3d` | 14 files / 176 tests passed |
+| `@mct/room-client` | 1 file / 45 tests passed |
+| `@mct/room-protocol` | 1 file / 60 tests passed |
+| `pnpm typecheck` | 7 workspace projects passed |
+| `pnpm build` | 7 workspace projects passed |
+| Server start smoke | 临时 credential + 随机端口通过，进程和端口已清理 |
+| Local table E2E | `verify-click-to-bet` 与 `verify-felt-mapping` 通过 |
+
+## 已知限制
+
+- 事件存储仅为进程内 `MemoryEventStore`，重启即丢失；尚无 Postgres 或持久回放服务。
+- 演示房间仅支持一个 human actor，不是生产多人账号/席位系统。
+- Basic AI 已工作；LLM 仅有 provider-neutral 接口、校验、超时和回退，未接具体 provider SDK。
+- 尚无生产级认证、授权、用户目录、secret 管理或教练后台服务。
+- table-3d 生产 bundle 当前约 748 kB（gzip 约 196 kB），Vite 会报告 chunk 大于 500 kB 的 warning；后续需 code splitting/manual chunks。
+- L1-L3 教学、教练、成绩单、真实多赌场批量规则包、语音和真钱相关能力均不在当前完成范围。
+
+## 文档
+
+- [Phase 0-1 设计规格](docs/superpowers/specs/2026-07-27-macau-casino-training-design.md)
+- [UI/场景设计规格](docs/superpowers/specs/2026-07-27-macau-casino-ui-scene-design-spec.md)
+- [Phase 0-1 实现计划](docs/superpowers/plans/2026-07-27-macau-casino-training-phase0-1.md)
+- [当前进度与提交基线](docs/development/current-progress.md)
+- [Git 与外部 worktree 工作流](docs/development/git-workflow.md)
