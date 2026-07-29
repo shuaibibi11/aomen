@@ -38,20 +38,38 @@ const validEvent = {
   at: 100,
 };
 
+const validRulePack = {
+  id: "baccarat",
+  version: "1.0.0",
+  displayName: "Baccarat",
+  variant: "standard",
+  limits: { min: 100, max: 100_000 },
+  commission: { rate: 0.05 },
+  mainPayouts: { player: 1, banker: 1, tie: 8 },
+  sideBets: [{ kind: "player_pair", payout: 11 }],
+  shoe: { deckCount: 8 },
+  dealing: { peekAllowed: false },
+  chipset: { currency: "HKD", denominations: [100, 500] },
+};
+
+const validSeats = [
+  { seatId: "seat-1", label: 1, occupantId: "human-1" },
+];
+
 describe("client message parsing", () => {
   it("parses every supported client message and table intent", () => {
     const validMessages = [
       { type: "join_room", tableId: "table-1", actorId: "human-1", credential: "room-secret" },
       { type: "ping", nonce: 42 },
-      { type: "submit_intent", intent: { type: "buy_in", actorId: "human-1", seatId: "seat-1", amount: 100 } },
-      { type: "submit_intent", intent: { type: "start_round", actorId: "human-1" } },
-      { type: "submit_intent", intent: { type: "place_bet", actorId: "human-1", seatId: "seat-1", betKind: "player", amount: 100 } },
-      { type: "submit_intent", intent: { type: "clear_bets", actorId: "human-1", seatId: "seat-1" } },
-      { type: "submit_intent", intent: { type: "no_more_bets", actorId: "human-1" } },
-      { type: "submit_intent", intent: { type: "deal_next", actorId: "human-1" } },
-      { type: "submit_intent", intent: { type: "reveal", actorId: "human-1" } },
-      { type: "submit_intent", intent: { type: "settle_round", actorId: "human-1" } },
-      { type: "submit_intent", intent: { type: "cash_out", actorId: "human-1", seatId: "seat-1" } },
+      { type: "submit_intent", requestId: "request-1", intent: { type: "buy_in", actorId: "human-1", seatId: "seat-1", amount: 100 } },
+      { type: "submit_intent", requestId: "request-2", intent: { type: "start_round", actorId: "human-1" } },
+      { type: "submit_intent", requestId: "request-3", intent: { type: "place_bet", actorId: "human-1", seatId: "seat-1", betKind: "player", amount: 100 } },
+      { type: "submit_intent", requestId: "request-4", intent: { type: "clear_bets", actorId: "human-1", seatId: "seat-1" } },
+      { type: "submit_intent", requestId: "request-5", intent: { type: "no_more_bets", actorId: "human-1" } },
+      { type: "submit_intent", requestId: "request-6", intent: { type: "deal_next", actorId: "human-1" } },
+      { type: "submit_intent", requestId: "request-7", intent: { type: "reveal", actorId: "human-1" } },
+      { type: "submit_intent", requestId: "request-8", intent: { type: "settle_round", actorId: "human-1" } },
+      { type: "submit_intent", requestId: "request-9", intent: { type: "cash_out", actorId: "human-1", seatId: "seat-1" } },
     ];
 
     for (const message of validMessages) {
@@ -70,6 +88,7 @@ describe("client message parsing", () => {
     { type: "ping", nonce: Number.NaN },
     { type: "ping", nonce: "42" },
     { type: "submit_intent" },
+    { type: "submit_intent", requestId: "", intent: { type: "start_round", actorId: "human-1" } },
     { type: "submit_intent", intent: { type: "place_bet", actorId: "human-1", seatId: "seat-1", betKind: "dragon", amount: 100 } },
     { type: "submit_intent", intent: { type: "place_bet", actorId: "human-1", seatId: "seat-1", betKind: "player", amount: 0 } },
     { type: "submit_intent", intent: { type: "place_bet", actorId: "human-1", seatId: "seat-1", betKind: "player", amount: Number.POSITIVE_INFINITY } },
@@ -85,8 +104,8 @@ describe("client message parsing", () => {
     });
   });
 
-  it("uses protocol version 2 for credential-authenticated joins", () => {
-    expect(ROOM_PROTOCOL_VERSION).toBe(2);
+  it("uses protocol version 3 for correlated authoritative sessions", () => {
+    expect(ROOM_PROTOCOL_VERSION).toBe(3);
   });
 });
 
@@ -101,6 +120,7 @@ describe("room protocol error codes", () => {
       "intent_not_allowed",
       "malformed_message",
       "internal_error",
+      "duplicate_request",
     ]);
   });
 
@@ -121,10 +141,13 @@ describe("server message parsing", () => {
       actorId: "human-1",
       protocolVersion: ROOM_PROTOCOL_VERSION,
       snapshot: validSnapshot,
+      rulePack: validRulePack,
+      seats: validSeats,
     },
     { type: "snapshot", snapshot: validSnapshot },
     { type: "event", event: validEvent },
-    { type: "error", code: "room_unavailable", message: "try later" },
+    { type: "intent_result", requestId: "request-1", event: validEvent },
+    { type: "error", code: "room_unavailable", message: "try later", requestId: "request-1" },
     { type: "pong", nonce: 7 },
   ])("parses supported server message $type", (message) => {
     expect(parseServerMessage(message)).toEqual(message);
@@ -138,6 +161,10 @@ describe("server message parsing", () => {
     { type: "joined", tableId: "", actorId: "human-1", protocolVersion: 2, snapshot: validSnapshot },
     { type: "joined", tableId: "table-1", actorId: "", protocolVersion: 2, snapshot: validSnapshot },
     { type: "joined", tableId: "table-1", actorId: "human-1", protocolVersion: "2", snapshot: validSnapshot },
+    { type: "joined", tableId: "table-1", actorId: "human-1", protocolVersion: 3, snapshot: validSnapshot, rulePack: validRulePack, seats: [{ seatId: "seat-1", label: 0, occupantId: "human-1" }] },
+    { type: "intent_result", requestId: "", event: validEvent },
+    { type: "intent_result", requestId: "request-1", event: { ...validEvent, seq: -1 } },
+    { type: "error", code: "internal_error", message: "bad", requestId: "" },
     { type: "snapshot", snapshot: { ...validSnapshot, seats: "not-an-array" } },
     { type: "snapshot", snapshot: { ...validSnapshot, phase: "invalid" } },
     { type: "event", event: { ...validEvent, seq: -1 } },
@@ -167,12 +194,15 @@ describe("server message parsing", () => {
       actorId: "human-1",
       protocolVersion: ROOM_PROTOCOL_VERSION,
       snapshot: { ...validSnapshot, publicConfig: { minimumBet: 10 } },
-      requestId: "request-1",
+      rulePack: { ...validRulePack, futureRule: true },
+      seats: validSeats,
+      futureField: "future",
     });
 
     expect(parsed).toMatchObject({
-      requestId: "request-1",
+      futureField: "future",
       snapshot: { publicConfig: { minimumBet: 10 } },
+      rulePack: { futureRule: true },
     });
   });
 });

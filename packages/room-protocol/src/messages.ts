@@ -25,9 +25,10 @@ import {
   asSeatId,
   asTableId,
 } from "@mct/shared";
+import { validateRulePack, type RulePack } from "@mct/rule-packs";
 
 /** Protocol version, bumped when a breaking change lands on the wire. */
-export const ROOM_PROTOCOL_VERSION = 2;
+export const ROOM_PROTOCOL_VERSION = 3;
 
 // --- Client → Server ---------------------------------------------------------
 
@@ -42,6 +43,7 @@ export interface JoinRoomMessage {
 /** Submit a table intent for the server to apply. */
 export interface SubmitIntentMessage {
   readonly type: "submit_intent";
+  readonly requestId: string;
   readonly intent: TableIntent;
 }
 
@@ -176,6 +178,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
       return {
         ...message,
         type,
+        requestId: requireNonEmptyString(message.requestId, "message.requestId"),
         intent: parseTableIntent(message.intent),
       } as SubmitIntentMessage;
     case "ping":
@@ -197,6 +200,14 @@ export interface JoinedMessage {
   readonly actorId: ActorId;
   readonly protocolVersion: number;
   readonly snapshot: TableSnapshot;
+  readonly rulePack: RulePack;
+  readonly seats: readonly RoomSeatDescriptor[];
+}
+
+export interface RoomSeatDescriptor {
+  readonly seatId: ReturnType<typeof asSeatId>;
+  readonly label: number;
+  readonly occupantId: ActorId | null;
 }
 
 /** A full table snapshot, broadcast after state changes. */
@@ -211,11 +222,18 @@ export interface EventMessage {
   readonly event: TableEvent;
 }
 
+export interface IntentResultMessage {
+  readonly type: "intent_result";
+  readonly requestId: string;
+  readonly event: TableEvent;
+}
+
 /** An error the server wants the client to surface. */
 export interface ErrorMessage {
   readonly type: "error";
   readonly code: RoomErrorCode;
   readonly message: string;
+  readonly requestId?: string;
 }
 
 /** Reply to a ping, echoing the client's nonce. */
@@ -229,6 +247,7 @@ export type ServerMessage =
   | JoinedMessage
   | SnapshotMessage
   | EventMessage
+  | IntentResultMessage
   | ErrorMessage
   | PongMessage;
 
@@ -244,6 +263,7 @@ export const ROOM_ERROR_CODES = [
   "intent_not_allowed",
   "malformed_message",
   "internal_error",
+  "duplicate_request",
 ] as const;
 
 export type RoomErrorCode = (typeof ROOM_ERROR_CODES)[number];
@@ -424,6 +444,36 @@ function parseTableEvent(value: unknown): TableEvent {
   return event as unknown as TableEvent;
 }
 
+function parseRulePack(value: unknown): RulePack {
+  try {
+    validateRulePack(value);
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : "rule pack is invalid";
+    throw new ServerMessageParseError(`message.rulePack is invalid: ${detail}`);
+  }
+  return value as RulePack;
+}
+
+function parseSeatDescriptors(value: unknown): readonly RoomSeatDescriptor[] {
+  return requireArray(value, "message.seats").map((seatValue, seatIndex) => {
+    const fieldName = `message.seats[${seatIndex}]`;
+    const seat = requireServerObject(seatValue, fieldName);
+    const label = requireFiniteNumber(seat.label, `${fieldName}.label`);
+    if (!Number.isInteger(label) || label <= 0) {
+      throw new ServerMessageParseError(`${fieldName}.label must be a positive integer`);
+    }
+    const occupantId = seat.occupantId === null
+      ? null
+      : asActorId(requireServerString(seat.occupantId, `${fieldName}.occupantId`));
+    return {
+      ...seat,
+      seatId: asSeatId(requireServerString(seat.seatId, `${fieldName}.seatId`)),
+      label,
+      occupantId,
+    } as RoomSeatDescriptor;
+  });
+}
+
 /**
  * Parse one untrusted server wire value. Required fields are validated while
  * unknown fields are retained so additive protocol changes remain compatible.
@@ -441,6 +491,8 @@ export function parseServerMessage(value: unknown): ServerMessage {
         actorId: asActorId(requireServerString(message.actorId, "message.actorId")),
         protocolVersion: requireNonNegativeInteger(message.protocolVersion, "message.protocolVersion"),
         snapshot: parseTableSnapshot(message.snapshot, "message.snapshot"),
+        rulePack: parseRulePack(message.rulePack),
+        seats: parseSeatDescriptors(message.seats),
       } as JoinedMessage;
     case "snapshot":
       return {
@@ -450,9 +502,19 @@ export function parseServerMessage(value: unknown): ServerMessage {
       } as SnapshotMessage;
     case "event":
       return { ...message, type, event: parseTableEvent(message.event) } as EventMessage;
+    case "intent_result":
+      return {
+        ...message,
+        type,
+        requestId: requireServerString(message.requestId, "message.requestId"),
+        event: parseTableEvent(message.event),
+      } as IntentResultMessage;
     case "error":
       if (!isRoomErrorCode(message.code)) {
         throw new ServerMessageParseError("message.code is not supported");
+      }
+      if (message.requestId !== undefined) {
+        requireServerString(message.requestId, "message.requestId");
       }
       return {
         ...message,

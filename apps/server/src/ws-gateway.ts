@@ -39,6 +39,8 @@ interface SocketContext {
   readonly actorId: ActorId;
 }
 
+const MAXIMUM_REQUEST_IDS_PER_SOCKET = 1024;
+
 export function getIntentActorError(
   joinedActorId: ActorId,
   intent: TableIntent,
@@ -61,6 +63,7 @@ export class WsGateway {
   private readonly activeSockets = new Set<WebSocket>();
   /** Authoritative identity and table established by each successful join. */
   private readonly socketContexts = new Map<WebSocket, SocketContext>();
+  private readonly handledRequestIds = new Map<WebSocket, Map<string, true>>();
   private readonly roomSubscriptions = new Map<
     TableId,
     UnsubscribeRoomUpdates
@@ -171,6 +174,7 @@ export class WsGateway {
       this.handleSocketClosed(socket);
       const context = this.socketContexts.get(socket);
       this.socketContexts.delete(socket);
+      this.handledRequestIds.delete(socket);
       if (context !== undefined) {
         this.removeUnusedRoomSubscription(context.tableId);
       }
@@ -294,6 +298,8 @@ export class WsGateway {
       actorId,
       protocolVersion: ROOM_PROTOCOL_VERSION,
       snapshot: room.getSnapshot(),
+      rulePack: room.getRulePack(),
+      seats: room.getSeatDescriptors(),
     });
   }
 
@@ -301,14 +307,34 @@ export class WsGateway {
     socket: WebSocket,
     message: Extract<ClientMessage, { type: "submit_intent" }>,
   ): void {
+    const requestId = message.requestId;
     const context = this.socketContexts.get(socket);
     if (context === undefined) {
       this.send(socket, {
         type: "error",
         code: "not_joined",
         message: "Join a room before submitting intents",
+        requestId,
       });
       return;
+    }
+    const requestIds = this.handledRequestIds.get(socket) ?? new Map<string, true>();
+    this.handledRequestIds.set(socket, requestIds);
+    if (requestIds.has(requestId)) {
+      this.send(socket, {
+        type: "error",
+        code: "duplicate_request",
+        message: "This request identifier was already handled",
+        requestId,
+      });
+      return;
+    }
+    requestIds.set(requestId, true);
+    if (requestIds.size > MAXIMUM_REQUEST_IDS_PER_SOCKET) {
+      const oldestRequestId = requestIds.keys().next().value as string | undefined;
+      if (oldestRequestId !== undefined) {
+        requestIds.delete(oldestRequestId);
+      }
     }
     const actorError = getIntentActorError(context.actorId, message.intent);
     if (actorError !== null) {
@@ -316,6 +342,7 @@ export class WsGateway {
         type: "error",
         code: actorError,
         message: "Intent actor must match the actor bound when joining",
+        requestId,
       });
       return;
     }
@@ -326,6 +353,7 @@ export class WsGateway {
         type: "error",
         code: "unknown_room",
         message: `No room for table ${context.tableId}`,
+        requestId,
       });
       return;
     }
@@ -334,18 +362,21 @@ export class WsGateway {
         type: "error",
         code: "intent_not_allowed",
         message: "This intent is not allowed for the joined actor and seat",
+        requestId,
       });
       return;
     }
 
     try {
-      room.submitIntent(message.intent);
+      const event = room.submitIntent(message.intent);
+      this.send(socket, { type: "intent_result", requestId, event });
     } catch (error) {
       this.reportError(error);
       this.send(socket, {
         type: "error",
         code: "internal_error",
         message: "Intent submission failed",
+        requestId,
       });
     }
   }

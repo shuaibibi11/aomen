@@ -26,6 +26,30 @@ const snapshot = {
   lastEventSeq: 0,
 } as unknown as TableSnapshot;
 
+const rulePack = {
+  id: "baccarat",
+  version: "1.0.0",
+  displayName: "Baccarat",
+  variant: "standard",
+  limits: { min: 100, max: 100_000 },
+  commission: { rate: 0.05 },
+  mainPayouts: { player: 1, banker: 1, tie: 8 },
+  sideBets: [],
+  shoe: { deckCount: 8 },
+  dealing: { peekAllowed: false },
+  chipset: { currency: "HKD", denominations: [100] },
+};
+
+const joinedMessage = {
+  type: "joined" as const,
+  tableId: "table-1",
+  actorId: "human-1",
+  protocolVersion: ROOM_PROTOCOL_VERSION,
+  snapshot,
+  rulePack,
+  seats: [{ seatId: "seat-1", label: 1, occupantId: "human-1" }],
+};
+
 type SocketEventType = "open" | "message" | "close" | "error";
 
 class FakeSocket implements WebSocketLike {
@@ -69,7 +93,11 @@ class FakeSocket implements WebSocketLike {
   }
 
   message(value: unknown): void {
-    this.emit("message", { data: JSON.stringify(value) } satisfies WebSocketMessageEvent);
+    const enrichedValue = typeof value === "object" && value !== null
+      && "type" in value && value.type === "joined"
+      ? { rulePack, seats: joinedMessage.seats, ...value }
+      : value;
+    this.emit("message", { data: JSON.stringify(enrichedValue) } satisfies WebSocketMessageEvent);
   }
 
   closeFromNetwork(): void {
@@ -175,13 +203,7 @@ function createHarness(overrides: Partial<ConstructorParameters<typeof RoomConne
 
 function join(socket: FakeSocket): void {
   socket.open();
-  socket.message({
-    type: "joined",
-    tableId: "table-1",
-    actorId: "human-1",
-    protocolVersion: ROOM_PROTOCOL_VERSION,
-    snapshot,
-  });
+  socket.message(joinedMessage);
 }
 
 describe("RoomConnection", () => {
@@ -242,7 +264,7 @@ describe("RoomConnection", () => {
       protocolVersion: ROOM_PROTOCOL_VERSION,
       snapshot: firstSnapshot,
     });
-    await expect(initialConnectionPromise).resolves.toEqual(firstSnapshot);
+    await expect(initialConnectionPromise).resolves.toMatchObject({ snapshot: firstSnapshot });
 
     sockets[0]?.closeFromNetwork();
     const reconnectionPromise = connection.connect();
@@ -263,7 +285,7 @@ describe("RoomConnection", () => {
       snapshot: rejoinedSnapshot,
     });
 
-    await expect(reconnectionPromise).resolves.toEqual(rejoinedSnapshot);
+    await expect(reconnectionPromise).resolves.toMatchObject({ snapshot: rejoinedSnapshot });
   });
 
   it("returns the last joined snapshot immediately while connected", async () => {
@@ -280,7 +302,7 @@ describe("RoomConnection", () => {
     });
     await initialConnectionPromise;
 
-    await expect(connection.connect()).resolves.toStrictEqual(joinedSnapshot);
+    await expect(connection.connect()).resolves.toMatchObject({ snapshot: joinedSnapshot });
   });
 
   it("rejects a reconnection waiter and clears handshake timers when closed", async () => {
@@ -323,7 +345,7 @@ describe("RoomConnection", () => {
       snapshot,
     });
 
-    await expect(bootstrapPromise).resolves.toEqual(snapshot);
+    await expect(bootstrapPromise).resolves.toEqual(joinedMessage);
     expect(states).toEqual(["idle", "connecting", "joining", "connected"]);
   });
 
@@ -392,7 +414,7 @@ describe("RoomConnection", () => {
 
     clock.advanceBy(500);
     join(sockets[1]!);
-    await expect(bootstrapPromise).resolves.toEqual(snapshot);
+    await expect(bootstrapPromise).resolves.toMatchObject({ snapshot });
   });
 
   it("sends heartbeat pings and accepts matching pongs without reconnecting", () => {
@@ -521,7 +543,7 @@ describe("RoomConnection", () => {
   it("rejects application messages unless the room is joined", async () => {
     const { connection, sockets } = createHarness();
     expect(() => connection.sendClientMessage({ type: "ping", nonce: 9 })).toThrow(RoomConnectionUnavailableError);
-    await expect(connection.submitIntent({ type: "start_round", actorId: asActorId("human-1") })).rejects.toThrow(RoomConnectionUnavailableError);
+    await expect(connection.submitIntent("request-1", { type: "start_round", actorId: asActorId("human-1") })).rejects.toThrow(RoomConnectionUnavailableError);
     void connection.connect();
     sockets[0]?.open();
     expect(() => connection.sendClientMessage({ type: "ping", nonce: 9 })).toThrow(RoomConnectionUnavailableError);
@@ -534,7 +556,7 @@ describe("RoomConnection", () => {
     const sendError = new Error("socket send failed");
     sockets[0]!.sendError = sendError;
 
-    await expect(connection.submitIntent({
+    await expect(connection.submitIntent("request-2", {
       type: "start_round",
       actorId: asActorId("human-1"),
     })).rejects.toBe(sendError);
@@ -585,7 +607,7 @@ describe("RoomConnection", () => {
 
     clock.advanceBy(500);
     join(sockets[1]!);
-    await expect(bootstrapPromise).resolves.toEqual(snapshot);
+    await expect(bootstrapPromise).resolves.toMatchObject({ snapshot });
   });
 
   it("rejects a permanent join failure even when socket close throws", async () => {

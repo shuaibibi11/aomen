@@ -3,10 +3,11 @@ import {
   ServerMessageParseError,
   parseServerMessage,
   type ClientMessage,
+  type JoinedMessage,
   type RoomErrorCode,
   type ServerMessage,
 } from "@mct/room-protocol";
-import type { ActorId, TableId, TableIntent, TableSnapshot } from "@mct/shared";
+import type { ActorId, TableId, TableIntent } from "@mct/shared";
 import type {
   RoomConnectionState,
   RoomConnectionStateListener,
@@ -87,8 +88,8 @@ interface ActiveSocket {
 }
 
 interface ConnectionWaiter {
-  readonly promise: Promise<TableSnapshot>;
-  readonly resolve: (snapshot: TableSnapshot) => void;
+  readonly promise: Promise<JoinedMessage>;
+  readonly resolve: (message: JoinedMessage) => void;
   readonly reject: (error: Error) => void;
   settled: boolean;
 }
@@ -135,9 +136,9 @@ function validateConfig(config: RoomConnectionConfig): void {
 }
 
 function createConnectionWaiter(): ConnectionWaiter {
-  let resolvePromise: (snapshot: TableSnapshot) => void = () => undefined;
+  let resolvePromise: (message: JoinedMessage) => void = () => undefined;
   let rejectPromise: (error: Error) => void = () => undefined;
-  const promise = new Promise<TableSnapshot>((resolve, reject) => {
+  const promise = new Promise<JoinedMessage>((resolve, reject) => {
     resolvePromise = resolve;
     rejectPromise = reject;
   });
@@ -173,7 +174,7 @@ export class RoomConnection {
   private nextPingNonce = 1;
   private socketGeneration = 0;
   private connectionWaiter: ConnectionWaiter | null = null;
-  private lastJoinedSnapshot: TableSnapshot | null = null;
+  private lastJoinedMessage: JoinedMessage | null = null;
   private transportRecoveryInProgress = false;
   private permanentlyClosed = false;
 
@@ -205,12 +206,12 @@ export class RoomConnection {
     return () => this.errorListeners.delete(listener);
   }
 
-  connect(): Promise<TableSnapshot> {
+  connect(): Promise<JoinedMessage> {
     if (this.permanentlyClosed) {
       return Promise.reject(new RoomConnectionUnavailableError("Room connection is permanently closed"));
     }
-    if (this.stateSnapshot.state === "connected" && this.lastJoinedSnapshot !== null) {
-      return Promise.resolve(this.lastJoinedSnapshot);
+    if (this.stateSnapshot.state === "connected" && this.lastJoinedMessage !== null) {
+      return Promise.resolve(this.lastJoinedMessage);
     }
     if (this.connectionWaiter !== null) {
       return this.connectionWaiter.promise;
@@ -239,8 +240,8 @@ export class RoomConnection {
     this.sendSerialized(activeSocket, message);
   }
 
-  async submitIntent(intent: TableIntent): Promise<void> {
-    this.sendClientMessage({ type: "submit_intent", intent });
+  async submitIntent(requestId: string, intent: TableIntent): Promise<void> {
+    this.sendClientMessage({ type: "submit_intent", requestId, intent });
   }
 
   close(): void {
@@ -405,8 +406,8 @@ export class RoomConnection {
         return;
       }
       this.startHeartbeat();
-      this.lastJoinedSnapshot = message.snapshot;
-      this.resolveConnectionWaiter(message.snapshot);
+      this.lastJoinedMessage = message;
+      this.resolveConnectionWaiter(message);
     }
   }
 
@@ -430,6 +431,11 @@ export class RoomConnection {
       case "event":
         if (message.event.tableId !== this.config.tableId) {
           throw new ServerMessageParseError("event message does not match the requested room identity");
+        }
+        return;
+      case "intent_result":
+        if (message.event.tableId !== this.config.tableId) {
+          throw new ServerMessageParseError("intent result does not match the requested room identity");
         }
         return;
       default:
@@ -496,14 +502,14 @@ export class RoomConnection {
     connectionWaiter.reject(error);
   }
 
-  private resolveConnectionWaiter(snapshot: TableSnapshot): void {
+  private resolveConnectionWaiter(message: JoinedMessage): void {
     const connectionWaiter = this.connectionWaiter;
     if (connectionWaiter === null || connectionWaiter.settled) {
       return;
     }
     connectionWaiter.settled = true;
     this.connectionWaiter = null;
-    connectionWaiter.resolve(snapshot);
+    connectionWaiter.resolve(message);
   }
 
   private startHeartbeat(): void {

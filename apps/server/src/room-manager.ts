@@ -95,6 +95,12 @@ export class RoomFaultedError extends Error {
  */
 export class Room {
   private readonly runtime: TableRuntime;
+  private readonly rulePack: RulePack;
+  private readonly seatDescriptors: readonly {
+    readonly seatId: SeatId;
+    readonly label: number;
+    readonly occupantId: ActorId | null;
+  }[];
   private readonly humanSeatId: SeatId;
   private readonly humanActorId: ActorId;
   private readonly joinCredential: string;
@@ -111,6 +117,7 @@ export class Room {
     private readonly publishUpdate: RoomUpdateListener,
   ) {
     this.store = store;
+    this.rulePack = options.rulePack;
     this.humanActorId = options.humanActorId;
     this.joinCredential = options.joinCredential;
     this.allowedClientActorIds = new Set([options.humanActorId]);
@@ -158,6 +165,15 @@ export class Room {
       });
     }
     this.aiSeats = aiSeats;
+    const occupantBySeatId = new Map<SeatId, ActorId>([
+      [humanSeatId, options.humanActorId],
+      ...aiSeats.map((seated) => [seated.seatId, seated.actorId] as const),
+    ]);
+    this.seatDescriptors = Object.freeze(seatIds.map((seatId, index) => Object.freeze({
+      seatId,
+      label: index + 1,
+      occupantId: occupantBySeatId.get(seatId) ?? null,
+    })));
 
     // Fund every occupied seat so a later bet is never rejected for an empty
     // stack. Buy-in is a real intent, so the event log records the funding.
@@ -231,6 +247,14 @@ export class Room {
 
   getSnapshot(): TableSnapshot {
     return this.runtime.getSnapshot();
+  }
+
+  getRulePack(): RulePack {
+    return this.rulePack;
+  }
+
+  getSeatDescriptors(): typeof this.seatDescriptors {
+    return this.seatDescriptors;
   }
 
   getHumanSeatId(): SeatId {

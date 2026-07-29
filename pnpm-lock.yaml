@@ -57,6 +57,9 @@ importers:
 
   packages/room-protocol:
     dependencies:
+      '@mct/rule-packs':
+        specifier: workspace:*
+        version: link:../rule-packs
       '@mct/shared':
         specifier: workspace:*
         version: link:../shared

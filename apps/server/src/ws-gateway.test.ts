@@ -239,6 +239,20 @@ describe("WsGateway room delivery", () => {
     secondSocket.close();
   });
 
+  it("sends authoritative rule and seat bootstrap descriptors", async () => {
+    const { humanActorId, room, tableId, url } = await createGateway();
+    const socket = await connectClient(url);
+
+    const joined = await joinClient(socket, tableId, humanActorId);
+
+    expect(joined).toMatchObject({
+      type: "joined",
+      rulePack: createRulePack(),
+      seats: room.getSeatDescriptors(),
+    });
+    socket.close();
+  });
+
   it.each([
     ["missing intent", { type: "submit_intent" }],
     ["unknown bet kind", { type: "submit_intent", intent: { type: "place_bet", actorId: "gateway-human", seatId: "gateway-table-seat-1", betKind: "dragon", amount: 100 } }],
@@ -284,6 +298,7 @@ describe("WsGateway room delivery", () => {
     socket.send(
       JSON.stringify({
         type: "submit_intent",
+        requestId: "ai-seat-request",
         intent: {
           type: "buy_in",
           actorId: humanActorId,
@@ -313,6 +328,7 @@ describe("WsGateway room delivery", () => {
     socket.send(
       JSON.stringify({
         type: "submit_intent",
+        requestId: "dealer-request",
         intent: { type: "start_round", actorId: humanActorId },
       }),
     );
@@ -339,10 +355,15 @@ describe("WsGateway room delivery", () => {
         message.event.intent?.type === "place_bet" &&
         message.event.accepted,
     );
+    const intentResult = waitForMessage(
+      socket,
+      (message) => message.type === "intent_result",
+    );
 
     socket.send(
       JSON.stringify({
         type: "submit_intent",
+        requestId: "accepted-request",
         intent: {
           type: "place_bet",
           actorId: humanActorId,
@@ -356,6 +377,47 @@ describe("WsGateway room delivery", () => {
     expect(await acceptedBet).toMatchObject({
       type: "event",
       event: { accepted: true, actorId: humanActorId },
+    });
+    const result = await intentResult;
+    expect(result).toMatchObject({
+      type: "intent_result",
+      requestId: "accepted-request",
+      event: { accepted: true },
+    });
+    expect(store.count()).toBe(eventCountBefore + 1);
+    socket.close();
+  });
+
+  it("does not execute a repeated request identifier twice", async () => {
+    const { humanActorId, room, store, tableId, url } = await createGateway();
+    const socket = await connectClient(url);
+    await joinClient(socket, tableId, humanActorId);
+    room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+    const eventCountBefore = store.count();
+    const request = {
+      type: "submit_intent",
+      requestId: "same-request",
+      intent: {
+        type: "place_bet",
+        actorId: humanActorId,
+        seatId: room.getHumanSeatId(),
+        betKind: "player",
+        amount: 100,
+      },
+    };
+    const firstResult = waitForMessage(socket, (message) => message.type === "intent_result");
+    socket.send(JSON.stringify(request));
+    await firstResult;
+    const duplicateError = waitForMessage(
+      socket,
+      (message) => message.type === "error" && message.code === "duplicate_request",
+    );
+    socket.send(JSON.stringify(request));
+
+    expect(await duplicateError).toMatchObject({
+      type: "error",
+      code: "duplicate_request",
+      requestId: "same-request",
     });
     expect(store.count()).toBe(eventCountBefore + 1);
     socket.close();
@@ -374,6 +436,7 @@ describe("WsGateway room delivery", () => {
     socket.send(
       JSON.stringify({
         type: "submit_intent",
+        requestId: "failure-request",
         intent: {
           type: "place_bet",
           actorId: humanActorId,
@@ -388,6 +451,7 @@ describe("WsGateway room delivery", () => {
       type: "error",
       code: "internal_error",
       message: "Intent submission failed",
+      requestId: "failure-request",
     });
     expect(reportedErrors).toHaveLength(1);
     expect(reportedErrors[0]).toBeInstanceOf(RoomFaultedError);
@@ -412,6 +476,7 @@ describe("WsGateway room delivery", () => {
     joinedSocket.send(
       JSON.stringify({
         type: "submit_intent",
+        requestId: "fault-request",
         intent: {
           type: "place_bet",
           actorId: humanActorId,

@@ -207,6 +207,7 @@ describe("WsGateway real WebSocket integration", () => {
     const unjoinedClient = await connect(url);
     unjoinedClient.send({
       type: "submit_intent",
+      requestId: "unjoined-request",
       intent: { type: "start_round", actorId: "some-actor" },
     });
     expect(await unjoinedClient.waitForMessage((message) => message.type === "error"))
