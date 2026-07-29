@@ -23,6 +23,7 @@ export type LlmPlayerAiOutcome =
   | "sit_out"
   | "invalid_response"
   | "provider_error"
+  | "fallback_error"
   | "timeout"
   | "aborted";
 
@@ -122,27 +123,24 @@ export class LlmPlayerAi implements PlayerDecisionSource {
     let response: LlmCompletionResponse | undefined;
     let timeoutTimer: object | undefined;
     let requestOutcome: LlmPlayerAiOutcome = "provider_error";
+    let timedOut = false;
 
     try {
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
         timeoutTimer = this.timerClock.setTimeout(() => {
-          providerController.abort();
+          timedOut = true;
           reject(new LlmRequestTimeoutError());
+          providerController.abort();
         }, this.options.timeoutMs);
       });
-      response = await Promise.race([
-        this.options.provider.complete({
-          model: this.options.model,
-          messages: this.createMessages(context),
-          signal: providerController.signal,
-        }),
-        timeoutPromise,
-      ]);
+      response = await this.requestProvider(context, providerController.signal, timeoutPromise);
 
       const decision = this.parseDecision(response.content, context);
       if (decision === undefined) {
         requestOutcome = "invalid_response";
-        return await this.fallback.decideBet(context, signal);
+        return await this.decideWithFallback(context, signal, () => {
+          requestOutcome = "fallback_error";
+        });
       }
 
       requestOutcome = decision === null ? "sit_out" : "accepted";
@@ -153,10 +151,12 @@ export class LlmPlayerAi implements PlayerDecisionSource {
         throw createAbortError();
       }
 
-      requestOutcome = error instanceof LlmRequestTimeoutError
+      requestOutcome = timedOut || error instanceof LlmRequestTimeoutError
         ? "timeout"
         : "provider_error";
-      return await this.fallback.decideBet(context, signal);
+      return await this.decideWithFallback(context, signal, () => {
+        requestOutcome = "fallback_error";
+      });
     } finally {
       if (timeoutTimer !== undefined) {
         this.timerClock.clearTimeout(timeoutTimer);
@@ -171,6 +171,43 @@ export class LlmPlayerAi implements PlayerDecisionSource {
         outcome: requestOutcome,
         ...(response?.usage === undefined ? {} : { usage: response.usage }),
       });
+    }
+  }
+
+  private requestProvider(
+    context: PlayerDecisionContext,
+    signal: AbortSignal,
+    timeoutPromise: Promise<never>,
+  ): Promise<LlmCompletionResponse> {
+    const providerPromise = this.options.provider.complete({
+      model: this.options.model,
+      messages: this.createMessages(context),
+      signal,
+    });
+    return Promise.race([providerPromise, timeoutPromise]);
+  }
+
+  private async decideWithFallback(
+    context: PlayerDecisionContext,
+    signal: AbortSignal,
+    recordFallbackError: () => void,
+  ): Promise<PlayerBetDecision | null> {
+    if (signal.aborted) {
+      throw createAbortError();
+    }
+
+    try {
+      const fallbackDecision = await this.fallback.decideBet(context, signal);
+      if (signal.aborted) {
+        throw createAbortError();
+      }
+      return this.validateDecision(fallbackDecision, context) ? fallbackDecision : null;
+    } catch (error) {
+      if (signal.aborted) {
+        throw createAbortError();
+      }
+      recordFallbackError();
+      return null;
     }
   }
 
@@ -208,7 +245,28 @@ export class LlmPlayerAi implements PlayerDecisionSource {
     }
     if (
       candidate.action !== "bet" ||
-      !hasExactKeys(candidate, ["action", "betKind", "amount"]) ||
+      !hasExactKeys(candidate, ["action", "betKind", "amount"])
+    ) {
+      return undefined;
+    }
+
+    const decision = {
+      betKind: candidate.betKind,
+      amount: candidate.amount,
+    };
+    return this.validateDecision(decision, context) ? decision : undefined;
+  }
+
+  private validateDecision(
+    candidate: unknown,
+    context: PlayerDecisionContext,
+  ): candidate is PlayerBetDecision | null {
+    if (candidate === null) {
+      return true;
+    }
+    if (
+      !isRecord(candidate) ||
+      !hasExactKeys(candidate, ["betKind", "amount"]) ||
       !isBetKind(candidate.betKind) ||
       !context.allowedBetKinds.includes(candidate.betKind) ||
       !this.isEnabledByRulePack(candidate.betKind) ||
@@ -222,10 +280,9 @@ export class LlmPlayerAi implements PlayerDecisionSource {
       candidate.amount > this.options.rulePack.limits.max ||
       candidate.amount > context.stack
     ) {
-      return undefined;
+      return false;
     }
-
-    return { betKind: candidate.betKind, amount: candidate.amount };
+    return true;
   }
 
   private isEnabledByRulePack(betKind: BetKind): boolean {

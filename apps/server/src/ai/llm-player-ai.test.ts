@@ -169,6 +169,62 @@ describe("LlmPlayerAi", () => {
     expect(decision).toEqual(expect.objectContaining({ amount: 100 }));
   });
 
+  it.each([
+    ["invalid response", new FakeLlmProvider([{ content: "not-json" }])],
+    ["provider error", new FakeLlmProvider([new Error("provider unavailable")])],
+  ])("invokes fallback exactly once after %s", async (_caseName, provider) => {
+    const fallback = {
+      decideBet: vi.fn(async () => ({ betKind: "player" as const, amount: 100 })),
+    };
+
+    await expect(
+      createAi(provider, { fallback }).decideBet(
+        createContext(),
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({ betKind: "player", amount: 100 });
+    expect(fallback.decideBet).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["unknown bet kind", { betKind: "dragon", amount: 100 }],
+    ["disabled side bet", { betKind: "banker_pair", amount: 100 }],
+    ["fractional amount", { betKind: "player", amount: 100.5 }],
+    ["amount above stack", { betKind: "player", amount: 700 }],
+  ])("turns an illegal fallback %s into sit out", async (_caseName, fallbackDecision) => {
+    const fallback = {
+      decideBet: vi.fn(async () => fallbackDecision as never),
+    };
+
+    await expect(
+      createAi(new FakeLlmProvider([{ content: "not-json" }]), { fallback }).decideBet(
+        createContext(),
+        new AbortController().signal,
+      ),
+    ).resolves.toBeNull();
+    expect(fallback.decideBet).toHaveBeenCalledOnce();
+  });
+
+  it("contains a throwing fallback and emits safe fallback_error telemetry", async () => {
+    const telemetryEvents: LlmPlayerAiTelemetry[] = [];
+    const fallback = {
+      decideBet: vi.fn(async () => {
+        throw new Error("fallback failed");
+      }),
+    };
+
+    await expect(
+      createAi(new FakeLlmProvider([new Error("provider failed")]), {
+        fallback,
+        onTelemetry: (event) => telemetryEvents.push(event),
+      }).decideBet(createContext(), new AbortController().signal),
+    ).resolves.toBeNull();
+    expect(fallback.decideBet).toHaveBeenCalledOnce();
+    expect(telemetryEvents).toEqual([
+      expect.objectContaining({ outcome: "fallback_error" }),
+    ]);
+  });
+
   it("aborts a timed-out provider request and uses fallback without real waiting", async () => {
     const timerClock = new ManualTimerClock();
     const provider = new FakeLlmProvider(["pending"]);
@@ -188,6 +244,36 @@ describe("LlmPlayerAi", () => {
       expect.objectContaining({ amount: 100 }),
     );
     expect(provider.requests[0]?.signal.aborted).toBe(true);
+    expect(telemetryEvents).toEqual([
+      expect.objectContaining({ outcome: "timeout" }),
+    ]);
+  });
+
+  it("classifies timeout before a provider synchronously rejects on abort", async () => {
+    const timerClock = new ManualTimerClock();
+    const telemetryEvents: LlmPlayerAiTelemetry[] = [];
+    const fallback = {
+      decideBet: vi.fn(async () => ({ betKind: "banker" as const, amount: 100 })),
+    };
+    const provider = {
+      complete: vi.fn(({ signal }: { signal: AbortSignal }) =>
+        new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(new DOMException("provider aborted", "AbortError"));
+          }, { once: true });
+        })),
+    };
+    const decisionPromise = createAi(provider, {
+      fallback,
+      timerClock,
+      onTelemetry: (event) => telemetryEvents.push(event),
+    }).decideBet(createContext(), new AbortController().signal);
+
+    await Promise.resolve();
+    timerClock.expire();
+
+    await expect(decisionPromise).resolves.toEqual({ betKind: "banker", amount: 100 });
+    expect(fallback.decideBet).toHaveBeenCalledOnce();
     expect(telemetryEvents).toEqual([
       expect.objectContaining({ outcome: "timeout" }),
     ]);

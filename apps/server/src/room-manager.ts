@@ -443,9 +443,16 @@ export class Room {
           snapshotBeforeDecision,
           seated.seatId,
         );
-        const decisionPromise = Promise.resolve().then(() =>
+        const sourceDecisionPromise = Promise.resolve().then(() =>
           seated.decisionSource.decideBet(context, controller.signal),
         );
+        const decisionPromise = sourceDecisionPromise.catch((error: unknown) => {
+          const currentEntry = this.aiDecisionCache.get(decisionKey);
+          if (currentEntry?.decisionPromise === decisionPromise) {
+            this.aiDecisionCache.delete(decisionKey);
+          }
+          throw error;
+        });
         decisionEntry = { controller, decisionPromise };
         this.aiDecisionCache.set(decisionKey, decisionEntry);
       }

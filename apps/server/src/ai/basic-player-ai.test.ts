@@ -55,4 +55,13 @@ describe("BasicPlayerAi", () => {
     expect(firstDecision).not.toHaveProperty("actorId");
     expect(firstDecision).not.toHaveProperty("seatId");
   });
+
+  it("sits out when the stack is below the table minimum", async () => {
+    const ai = new BasicPlayerAi({ rulePack: createRulePack(), seed: "low-stack" });
+    const context = { ...createContext(), stack: 99 };
+
+    await expect(
+      ai.decideBet(context, new AbortController().signal),
+    ).resolves.toBeNull();
+  });
 });

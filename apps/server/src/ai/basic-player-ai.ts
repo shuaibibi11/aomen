@@ -39,10 +39,10 @@ export class BasicPlayerAi implements PlayerDecisionSource {
    * seat has been funded to the minimum.
    */
   async decideBet(
-    _context: PlayerDecisionContext,
+    context: PlayerDecisionContext,
     signal: AbortSignal,
   ): Promise<PlayerBetDecision | null> {
-    if (signal.aborted) {
+    if (signal.aborted || context.stack < this.rulePack.limits.min) {
       return null;
     }
     const betKind = this.rng.nextFloat() < 0.5 ? "player" : "banker";

@@ -114,4 +114,35 @@ describe("Room AI decision boundary", () => {
     );
     expect(betEvents[1]).toEqual(expect.objectContaining({ accepted: true }));
   });
+
+  it("retries a rejected decision during a same-round scheduler restart", async () => {
+    const decideBet = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary decision failure"))
+      .mockResolvedValueOnce({ betKind: "player", amount: 100 });
+    const store = new MemoryEventStore();
+    const tableId = asTableId("decision-retry-table");
+    const room = new RoomManager(store).createRoom({
+      tableId,
+      rulePack: createRulePack(),
+      humanActorId: asActorId("decision-retry-human"),
+      joinCredential: "decision-retry-credential",
+      seatCount: 2,
+      aiCount: 1,
+      shoeSeed: "decision-retry-seed",
+      aiDecisionSourceFactory: () => ({ decideBet }),
+    });
+
+    room.startAutomaticRound();
+    await expect(
+      room.placeAutomaticPlayerBets(new AbortController().signal),
+    ).rejects.toThrow("temporary decision failure");
+    await expect(
+      room.placeAutomaticPlayerBets(new AbortController().signal),
+    ).resolves.toBeUndefined();
+
+    expect(decideBet).toHaveBeenCalledTimes(2);
+    expect(
+      store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
+    ).toHaveLength(1);
+  });
 });

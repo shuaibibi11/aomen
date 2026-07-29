@@ -159,6 +159,84 @@ describe("AutomaticRoundScheduler", () => {
     expect(scheduler.isRunning()).toBe(true);
   });
 
+  it("continues scheduling when an LLM fallback throws", async () => {
+    const tableId = asTableId("fallback-failure-scheduler-table");
+    const rulePack = createRulePack();
+    const store = new MemoryEventStore();
+    const room = new RoomManager(store).createRoom({
+      tableId,
+      rulePack,
+      humanActorId: asActorId("fallback-failure-human"),
+      joinCredential: "fallback-failure-credential",
+      seatCount: 2,
+      aiCount: 1,
+      shoeSeed: "fallback-failure-seed",
+      aiDecisionSourceFactory: ({ seed }) => new LlmPlayerAi({
+        provider: new FakeLlmProvider([new Error("provider failed")]),
+        fallback: {
+          decideBet: async () => {
+            throw new Error("fallback failed");
+          },
+        },
+        model: "test-model",
+        rulePack,
+        seed,
+        timeoutMs: 100,
+      }),
+    });
+    const onError = vi.fn();
+    const scheduler = new AutomaticRoundScheduler(room, TIMING, { onError });
+
+    scheduler.start();
+    await advance(0);
+
+    expect(scheduler.isRunning()).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+    expect(
+      store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
+    ).toHaveLength(0);
+
+    await advance(TIMING.bettingWindowMs);
+    expect(room.getSnapshot().phase).toBe("no_more_bets");
+    expect(scheduler.isRunning()).toBe(true);
+  });
+
+  it("retries a rejected AI decision after restarting in the same round", async () => {
+    const tableId = asTableId("decision-restart-scheduler-table");
+    const store = new MemoryEventStore();
+    const decideBet = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary decision failure"))
+      .mockResolvedValueOnce({ betKind: "player", amount: 100 });
+    const room = new RoomManager(store).createRoom({
+      tableId,
+      rulePack: createRulePack(),
+      humanActorId: asActorId("decision-restart-human"),
+      joinCredential: "decision-restart-credential",
+      seatCount: 2,
+      aiCount: 1,
+      shoeSeed: "decision-restart-seed",
+      aiDecisionSourceFactory: () => ({ decideBet }),
+    });
+    const onError = vi.fn();
+    const scheduler = new AutomaticRoundScheduler(room, TIMING, { onError });
+
+    scheduler.start();
+    await advance(0);
+
+    expect(scheduler.isRunning()).toBe(false);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(room.getSnapshot().phase).toBe("round_betting");
+
+    scheduler.start();
+    await advance(0);
+
+    expect(scheduler.isRunning()).toBe(true);
+    expect(decideBet).toHaveBeenCalledTimes(2);
+    expect(
+      store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
+    ).toHaveLength(1);
+  });
+
   it("falls back from fractional LLM wagers and completes the round", async () => {
     const tableId = asTableId("fractional-wager-scheduler-table");
     const rulePack = createRulePack();
