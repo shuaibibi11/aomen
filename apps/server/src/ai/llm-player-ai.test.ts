@@ -331,4 +331,36 @@ describe("LlmPlayerAi", () => {
     const serializedTelemetry = JSON.stringify(telemetryEvents);
     expect(serializedTelemetry).not.toMatch(/prompt|content|credential|actorId|seatId/i);
   });
+
+  it("sanitizes untrusted provider metadata before emitting telemetry", async () => {
+    const telemetryEvents: LlmPlayerAiTelemetry[] = [];
+    const longProviderRequestId = `safe\u0000request\n${"x".repeat(200)}`;
+    const maliciousProviderResult = {
+      content: '{"action":"sit_out"}',
+      providerRequestId: longProviderRequestId,
+      usage: {
+        inputTokens: 20,
+        outputTokens: -1,
+        totalTokens: 12.5,
+        prompt: "private prompt content",
+        credential: "provider-secret",
+      },
+    } as never;
+
+    await createAi(new FakeLlmProvider([maliciousProviderResult]), {
+      onTelemetry: (event) => telemetryEvents.push(event),
+    }).decideBet(createContext(), new AbortController().signal);
+
+    expect(telemetryEvents).toEqual([{
+      model: "provider-neutral-model",
+      providerRequestId: `saferequest${"x".repeat(117)}`,
+      latencyMs: expect.any(Number),
+      outcome: "sit_out",
+      usage: { inputTokens: 20 },
+    }]);
+    const serializedTelemetry = JSON.stringify(telemetryEvents);
+    expect(serializedTelemetry).not.toMatch(
+      /private prompt content|provider-secret|prompt|credential/,
+    );
+  });
 });

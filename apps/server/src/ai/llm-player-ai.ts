@@ -69,12 +69,51 @@ const DEFAULT_TIMER_CLOCK: TimerClock = {
     globalThis.clearTimeout(timer as ReturnType<typeof globalThis.setTimeout>),
 };
 
+const MAX_PROVIDER_REQUEST_ID_LENGTH = 128;
+const PROVIDER_REQUEST_ID_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
+const USAGE_FIELD_NAMES = [
+  "inputTokens",
+  "outputTokens",
+  "totalTokens",
+] as const satisfies readonly (keyof LlmUsage)[];
+
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sanitizeProviderRequestId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const sanitizedValue = value
+    .replace(PROVIDER_REQUEST_ID_CONTROL_CHARACTERS, "")
+    .slice(0, MAX_PROVIDER_REQUEST_ID_LENGTH);
+  return sanitizedValue.length === 0 ? undefined : sanitizedValue;
+}
+
+function sanitizeUsage(value: unknown): LlmUsage | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const sanitizedUsage: Record<string, number> = {};
+  for (const fieldName of USAGE_FIELD_NAMES) {
+    const fieldValue = value[fieldName];
+    if (
+      typeof fieldValue === "number" &&
+      Number.isSafeInteger(fieldValue) &&
+      fieldValue >= 0
+    ) {
+      sanitizedUsage[fieldName] = fieldValue;
+    }
+  }
+
+  return Object.keys(sanitizedUsage).length === 0 ? undefined : sanitizedUsage;
 }
 
 function hasExactKeys(
@@ -162,14 +201,14 @@ export class LlmPlayerAi implements PlayerDecisionSource {
         this.timerClock.clearTimeout(timeoutTimer);
       }
       signal.removeEventListener("abort", abortProvider);
+      const providerRequestId = sanitizeProviderRequestId(response?.providerRequestId);
+      const usage = sanitizeUsage(response?.usage);
       this.emitTelemetry({
         model: this.options.model,
-        ...(response?.providerRequestId === undefined
-          ? {}
-          : { providerRequestId: response.providerRequestId }),
+        ...(providerRequestId === undefined ? {} : { providerRequestId }),
         latencyMs: Math.max(0, this.timerClock.now() - startedAt),
         outcome: requestOutcome,
-        ...(response?.usage === undefined ? {} : { usage: response.usage }),
+        ...(usage === undefined ? {} : { usage }),
       });
     }
   }
