@@ -275,6 +275,40 @@ export class Room {
     }
   }
 
+  /** Open a new system-dealt round and its betting window. */
+  startAutomaticRound(): void {
+    this.applyAutomaticIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+  }
+
+  /** Ask each seated AI for its bet while betting remains open. */
+  placeAutomaticPlayerBets(): void | Promise<void> {
+    for (const seated of this.aiSeats) {
+      const bet = seated.ai.decideBet();
+      if (bet !== null) {
+        this.applyAutomaticIntent(bet);
+      }
+    }
+  }
+
+  /** Close the betting window using the authoritative system dealer intent. */
+  closeAutomaticBetting(): void {
+    this.applyAutomaticIntent({ type: "no_more_bets", actorId: SYSTEM_DEALER });
+  }
+
+  /** Deal exactly one card through the table runtime. */
+  dealNextAutomaticCard(): void {
+    this.applyAutomaticIntent({ type: "deal_next", actorId: SYSTEM_DEALER });
+  }
+
+  /** Settle the completed hand through the table runtime. */
+  settleAutomaticRound(): void {
+    this.applyAutomaticIntent({ type: "settle_round", actorId: SYSTEM_DEALER });
+  }
+
+  getAutomaticRoundPhase(): TableSnapshot["phase"] {
+    return this.runtime.getSnapshot().phase;
+  }
+
   /**
    * Advance one full round with the system dealer driving:
    * start → AI bets → no-more-bets → deal to completion → settle.
@@ -284,29 +318,25 @@ export class Room {
   * a round can be driven end to end without a socket.
    */
   playAutomaticRound(): void {
-    this.applyAutomaticIntent({ type: "start_round", actorId: SYSTEM_DEALER });
-
-    for (const seated of this.aiSeats) {
-      const bet = seated.ai.decideBet();
-      if (bet !== null) {
-        this.applyAutomaticIntent(bet);
-      }
+    this.startAutomaticRound();
+    const aiBetResult = this.placeAutomaticPlayerBets();
+    if (aiBetResult instanceof Promise) {
+      throw new Error("playAutomaticRound does not support asynchronous AI betting");
     }
-
-    this.applyAutomaticIntent({ type: "no_more_bets", actorId: SYSTEM_DEALER });
+    this.closeAutomaticBetting();
 
     // Deal until the runtime leaves the dealing phase.
     let guard = 0;
-    this.applyAutomaticIntent({ type: "deal_next", actorId: SYSTEM_DEALER });
+    this.dealNextAutomaticCard();
     while (this.runtime.getSnapshot().phase === "dealing") {
-      this.applyAutomaticIntent({ type: "deal_next", actorId: SYSTEM_DEALER });
+      this.dealNextAutomaticCard();
       guard += 1;
       if (guard > 12) {
         throw new Error("deal did not reach settling");
       }
     }
 
-    this.applyAutomaticIntent({ type: "settle_round", actorId: SYSTEM_DEALER });
+    this.settleAutomaticRound();
   }
 }
 

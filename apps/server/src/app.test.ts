@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { asActorId } from "@mct/shared";
 import { createApp } from "./app.js";
+import type { AutomaticRoundTiming } from "./automatic-round-scheduler.js";
 
 const ORIGINAL_DEMO_ROOM_CREDENTIAL = process.env.DEMO_ROOM_CREDENTIAL;
 const DEMO_HUMAN_ACTOR_ID = asActorId("demo-human");
@@ -15,6 +16,25 @@ afterEach(() => {
 });
 
 describe("createApp room credential configuration", () => {
+  it("creates a stopped demo scheduler with configurable timing", async () => {
+    const automaticRoundTiming: AutomaticRoundTiming = {
+      bettingWindowMs: 20,
+      cardDealIntervalMs: 10,
+      settlementDisplayMs: 30,
+      interRoundDelayMs: 40,
+    };
+
+    const app = await createApp({
+      demoRoomCredential: "scheduler-app-credential",
+      automaticRoundTiming,
+    });
+
+    expect(app.demoScheduler.isRunning()).toBe(false);
+    app.demoScheduler.start();
+    expect(app.demoRoom.getSnapshot().phase).toBe("round_betting");
+    app.demoScheduler.stop();
+  });
+
   it("prefers an explicitly provided credential over the environment", async () => {
     const optionCredential = "option-test-credential";
     process.env.DEMO_ROOM_CREDENTIAL = "environment-test-credential";
