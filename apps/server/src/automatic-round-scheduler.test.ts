@@ -416,6 +416,89 @@ describe("AutomaticRoundScheduler", () => {
     expect(decideBet).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps only the current round AI decisions across multiple rounds", async () => {
+    const { room } = createRealRoom();
+    const scheduler = new AutomaticRoundScheduler(room, TIMING);
+    const getDecisionCacheSize = () =>
+      (
+        room as unknown as {
+          aiDecisionCache: ReadonlyMap<string, unknown>;
+        }
+      ).aiDecisionCache.size;
+
+    scheduler.start();
+    for (let completedRoundCount = 0; completedRoundCount < 3; completedRoundCount += 1) {
+      await advance(0);
+      expect(room.getSnapshot().phase).toBe("round_betting");
+      expect(getDecisionCacheSize()).toBeLessThanOrEqual(2);
+
+      await advance(TIMING.bettingWindowMs);
+      while (room.getSnapshot().phase !== "round_end") {
+        await advance(TIMING.cardDealIntervalMs);
+      }
+
+      if (completedRoundCount < 2) {
+        await advance(TIMING.settlementDisplayMs + TIMING.interRoundDelayMs);
+      }
+    }
+  });
+
+  it("does not submit an old round in-flight decision after a new round starts", async () => {
+    const { humanActorId, room, store, tableId } = createRealRoom();
+    const firstAiSeat = (
+      room as unknown as {
+        aiSeats: Array<{
+          ai: { decideBet: () => unknown };
+        }>;
+      }
+    ).aiSeats[0];
+    if (firstAiSeat === undefined) {
+      throw new Error("Expected a seated AI for the stale decision test");
+    }
+
+    const originalDecision = firstAiSeat.ai.decideBet();
+    let resolveOldDecision!: (decision: unknown) => void;
+    firstAiSeat.ai.decideBet = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOldDecision = resolve;
+          }),
+      )
+      .mockImplementation(() => null);
+    const signal = new AbortController().signal;
+
+    room.startAutomaticRound();
+    const oldRoundBetting = room.placeAutomaticPlayerBets(signal);
+    await advance(0);
+    room.closeAutomaticBetting();
+    room.dealNextAutomaticCard();
+    while (room.getAutomaticRoundPhase() === "dealing") {
+      room.dealNextAutomaticCard();
+    }
+    room.settleAutomaticRound();
+    room.startAutomaticRound();
+    await room.placeAutomaticPlayerBets(signal);
+
+    resolveOldDecision(originalDecision);
+    await oldRoundBetting;
+
+    const firstAiActorId = room
+      .getSnapshot()
+      .seats.find((seat) => seat.seatId === (originalDecision as { seatId: string }).seatId)
+      ?.occupantId;
+    const firstAiBetEvents = store
+      .listByTable(tableId)
+      .filter(
+        (event) =>
+          event.intent?.type === "place_bet" &&
+          event.actorId === firstAiActorId &&
+          event.actorId !== humanActorId,
+      );
+    expect(firstAiBetEvents).toHaveLength(0);
+  });
+
   it("stops before the next action when the room becomes faulted", async () => {
     let roomIsFaulted = false;
     const room: AutomaticRoundRoom = {

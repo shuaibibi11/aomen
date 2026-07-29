@@ -15,6 +15,7 @@ import {
   asSeatId,
   SYSTEM_DEALER,
   type ActorId,
+  type RoundId,
   type SeatId,
   type TableEvent,
   type TableId,
@@ -101,6 +102,7 @@ export class Room {
   private readonly aiSeats: readonly SeatedAi[];
   private readonly store: EventStore;
   private readonly aiDecisionCache = new Map<string, AiDecisionCacheEntry>();
+  private cacheRoundId: RoundId | null = null;
   private fault: RoomFaultedError | null = null;
 
   constructor(
@@ -134,6 +136,7 @@ export class Room {
       seatIds,
       drawCard: () => shoe.draw(),
     });
+    this.cacheRoundId = this.runtime.getSnapshot().roundId;
 
     // Fill seats after the human with basic AI, up to the requested count.
     const aiSeats: SeatedAi[] = [];
@@ -188,10 +191,12 @@ export class Room {
       // stop permanently rather than serving a state that diverged from the
       // authoritative event log. A persistent engine should use a transaction
       // or transactional outbox before replacing this model.
+      this.aiDecisionCache.clear();
       this.fault = new RoomFaultedError(event.tableId, error);
       throw this.fault;
     }
     const snapshot = this.runtime.getSnapshot();
+    this.synchronizeAiDecisionCache(snapshot.roundId);
     if (event.seq !== snapshot.lastEventSeq) {
       throw new Error(
         `Room update sequence mismatch: event ${event.seq}, snapshot ${snapshot.lastEventSeq}`,
@@ -240,6 +245,16 @@ export class Room {
     if (this.fault !== null) {
       throw this.fault;
     }
+  }
+
+  /** Drop decisions as soon as the runtime advances to another round. */
+  private synchronizeAiDecisionCache(roundId: RoundId): void {
+    if (this.cacheRoundId === roundId) {
+      return;
+    }
+
+    this.aiDecisionCache.clear();
+    this.cacheRoundId = roundId;
   }
 
   /** Whether an ordinary client socket may bind to this actor identity. */
@@ -291,6 +306,7 @@ export class Room {
   async placeAutomaticPlayerBets(signal: AbortSignal): Promise<void> {
     for (const seated of this.aiSeats) {
       const snapshotBeforeDecision = this.runtime.getSnapshot();
+      this.synchronizeAiDecisionCache(snapshotBeforeDecision.roundId);
       if (signal.aborted || snapshotBeforeDecision.phase !== "round_betting") {
         return;
       }
@@ -298,7 +314,8 @@ export class Room {
         continue;
       }
 
-      const decisionKey = `${snapshotBeforeDecision.roundId}:${seated.seatId}`;
+      const decisionRoundId = snapshotBeforeDecision.roundId;
+      const decisionKey = seated.seatId;
       let decisionEntry = this.aiDecisionCache.get(decisionKey);
       if (decisionEntry === undefined) {
         const decisionPromise = Promise.resolve().then(() => seated.ai.decideBet());
@@ -308,7 +325,12 @@ export class Room {
 
       const bet = await decisionEntry.decisionPromise;
       const snapshotAfterDecision = this.runtime.getSnapshot();
-      if (signal.aborted || snapshotAfterDecision.phase !== "round_betting") {
+      this.synchronizeAiDecisionCache(snapshotAfterDecision.roundId);
+      if (
+        signal.aborted ||
+        snapshotAfterDecision.phase !== "round_betting" ||
+        snapshotAfterDecision.roundId !== decisionRoundId
+      ) {
         return;
       }
       if (snapshotAfterDecision.bets.some((placedBet) => placedBet.seatId === seated.seatId)) {
