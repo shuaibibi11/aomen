@@ -214,6 +214,8 @@ export class LlmPlayerAi implements PlayerDecisionSource {
       !this.isEnabledByRulePack(candidate.betKind) ||
       typeof candidate.amount !== "number" ||
       !Number.isFinite(candidate.amount) ||
+      !Number.isInteger(candidate.amount) ||
+      candidate.amount <= 0 ||
       candidate.amount < context.limits.min ||
       candidate.amount > context.limits.max ||
       candidate.amount < this.options.rulePack.limits.min ||

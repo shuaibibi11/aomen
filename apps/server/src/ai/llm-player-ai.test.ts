@@ -132,6 +132,9 @@ describe("LlmPlayerAi", () => {
     ["below minimum", '{"action":"bet","betKind":"player","amount":99}'],
     ["above maximum", '{"action":"bet","betKind":"player","amount":1001}'],
     ["insufficient stack", '{"action":"bet","betKind":"player","amount":700}'],
+    ["fractional amount", '{"action":"bet","betKind":"player","amount":100.5}'],
+    ["zero amount", '{"action":"bet","betKind":"player","amount":0}'],
+    ["negative amount", '{"action":"bet","betKind":"player","amount":-100}'],
     ["non-finite amount", '{"action":"bet","betKind":"player","amount":"Infinity"}'],
     ["unexpected identity", '{"action":"bet","betKind":"player","amount":100,"actorId":"x"}'],
   ])("uses deterministic Basic fallback for %s", async (_caseName, content) => {

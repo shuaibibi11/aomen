@@ -159,6 +159,59 @@ describe("AutomaticRoundScheduler", () => {
     expect(scheduler.isRunning()).toBe(true);
   });
 
+  it("falls back from fractional LLM wagers and completes the round", async () => {
+    const tableId = asTableId("fractional-wager-scheduler-table");
+    const rulePack = createRulePack();
+    const store = new MemoryEventStore();
+    const room = new RoomManager(store).createRoom({
+      tableId,
+      rulePack,
+      humanActorId: asActorId("fractional-wager-human"),
+      joinCredential: "fractional-wager-credential",
+      seatCount: 3,
+      aiCount: 2,
+      shoeSeed: "fractional-wager-seed",
+      aiDecisionSourceFactory: ({ seed }) => new LlmPlayerAi({
+        provider: new FakeLlmProvider([{
+          content: '{"action":"bet","betKind":"player","amount":100.5}',
+        }]),
+        model: "test-model",
+        rulePack,
+        seed,
+        timeoutMs: 100,
+      }),
+    });
+    const onError = vi.fn();
+    const scheduler = new AutomaticRoundScheduler(room, TIMING, { onError });
+
+    scheduler.start();
+    await advance(0);
+
+    const aiBetEvents = store
+      .listByTable(tableId)
+      .filter((event) => event.intent?.type === "place_bet");
+    expect(aiBetEvents).toHaveLength(2);
+    expect(aiBetEvents.every((event) => event.accepted === true)).toBe(true);
+    expect(
+      aiBetEvents.every((event) =>
+        event.intent?.type === "place_bet" &&
+        Number.isInteger(event.intent.amount) &&
+        event.intent.amount >= rulePack.limits.min &&
+        event.intent.amount <= rulePack.limits.max
+      ),
+    ).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+
+    await advance(TIMING.bettingWindowMs);
+    while (room.getSnapshot().phase !== "round_end") {
+      await advance(TIMING.cardDealIntervalMs);
+    }
+
+    expect(room.getSnapshot().outcome).not.toBeNull();
+    expect(scheduler.isRunning()).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("closes betting at the deadline without awaiting pending AI", async () => {
     let resolveAiBets!: () => void;
     const aiBets = new Promise<void>((resolve) => {
