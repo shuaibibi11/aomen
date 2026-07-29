@@ -39,6 +39,22 @@ importers:
         specifier: 3.0.5
         version: 3.0.5(@types/node@22.10.5)
 
+  packages/room-client:
+    dependencies:
+      '@mct/room-protocol':
+        specifier: workspace:*
+        version: link:../room-protocol
+      '@mct/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      typescript:
+        specifier: 5.7.3
+        version: 5.7.3
+      vitest:
+        specifier: 3.0.5
+        version: 3.0.5(@types/node@22.10.5)
+
   packages/room-protocol:
     dependencies:
       '@mct/shared':

@@ -16,7 +16,15 @@ import type {
   TableIntent,
   TableSnapshot,
 } from "@mct/shared";
-import { BET_KINDS, asActorId, asSeatId, asTableId } from "@mct/shared";
+import {
+  BET_KINDS,
+  RANKS,
+  SUITS,
+  asActorId,
+  asRoundId,
+  asSeatId,
+  asTableId,
+} from "@mct/shared";
 
 /** Protocol version, bumped when a breaking change lands on the wire. */
 export const ROOM_PROTOCOL_VERSION = 2;
@@ -245,4 +253,174 @@ const roomErrorCodeSet: ReadonlySet<unknown> = new Set(ROOM_ERROR_CODES);
 /** Narrow an untrusted wire value to a supported room error code. */
 export function isRoomErrorCode(value: unknown): value is RoomErrorCode {
   return roomErrorCodeSet.has(value);
+}
+
+/** Raised when an untrusted server value does not satisfy the wire contract. */
+export class ServerMessageParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ServerMessageParseError";
+  }
+}
+
+const tablePhaseSet: ReadonlySet<unknown> = new Set([
+  "shoe_ready",
+  "round_betting",
+  "no_more_bets",
+  "dealing",
+  "settling",
+  "round_end",
+]);
+const rankSet: ReadonlySet<unknown> = new Set(RANKS);
+const suitSet: ReadonlySet<unknown> = new Set(SUITS);
+const roundOutcomeSet: ReadonlySet<unknown> = new Set(["player", "banker", "tie"]);
+
+function requireServerObject(value: unknown, fieldName: string): UntrustedObject {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ServerMessageParseError(`${fieldName} must be an object`);
+  }
+  return value as UntrustedObject;
+}
+
+function requireServerString(value: unknown, fieldName: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new ServerMessageParseError(`${fieldName} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requireFiniteNumber(value: unknown, fieldName: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new ServerMessageParseError(`${fieldName} must be a finite number`);
+  }
+  return value;
+}
+
+function requireNonNegativeInteger(value: unknown, fieldName: string): number {
+  const numberValue = requireFiniteNumber(value, fieldName);
+  if (!Number.isInteger(numberValue) || numberValue < 0) {
+    throw new ServerMessageParseError(`${fieldName} must be a non-negative integer`);
+  }
+  return numberValue;
+}
+
+function requireArray(value: unknown, fieldName: string): readonly unknown[] {
+  if (!Array.isArray(value)) {
+    throw new ServerMessageParseError(`${fieldName} must be an array`);
+  }
+  return value;
+}
+
+function validateCard(value: unknown, fieldName: string): void {
+  const card = requireServerObject(value, fieldName);
+  if (!rankSet.has(card.rank) || !suitSet.has(card.suit)) {
+    throw new ServerMessageParseError(`${fieldName} must contain a supported rank and suit`);
+  }
+}
+
+function parseTableSnapshot(value: unknown, fieldName: string): TableSnapshot {
+  const snapshot = requireServerObject(value, fieldName);
+  asTableId(requireServerString(snapshot.tableId, `${fieldName}.tableId`));
+  asRoundId(requireServerString(snapshot.roundId, `${fieldName}.roundId`));
+  if (!tablePhaseSet.has(snapshot.phase)) {
+    throw new ServerMessageParseError(`${fieldName}.phase is not supported`);
+  }
+
+  for (const [seatIndex, seatValue] of requireArray(snapshot.seats, `${fieldName}.seats`).entries()) {
+    const seat = requireServerObject(seatValue, `${fieldName}.seats[${seatIndex}]`);
+    asSeatId(requireServerString(seat.seatId, `${fieldName}.seats[${seatIndex}].seatId`));
+    if (seat.occupantId !== null) {
+      asActorId(requireServerString(seat.occupantId, `${fieldName}.seats[${seatIndex}].occupantId`));
+    }
+    requireFiniteNumber(seat.stack, `${fieldName}.seats[${seatIndex}].stack`);
+  }
+
+  for (const [betIndex, betValue] of requireArray(snapshot.bets, `${fieldName}.bets`).entries()) {
+    const bet = requireServerObject(betValue, `${fieldName}.bets[${betIndex}]`);
+    asSeatId(requireServerString(bet.seatId, `${fieldName}.bets[${betIndex}].seatId`));
+    if (!betKindSet.has(bet.betKind)) {
+      throw new ServerMessageParseError(`${fieldName}.bets[${betIndex}].betKind is not supported`);
+    }
+    requireFiniteNumber(bet.amount, `${fieldName}.bets[${betIndex}].amount`);
+  }
+
+  const hands = requireServerObject(snapshot.hands, `${fieldName}.hands`);
+  for (const [cardIndex, card] of requireArray(hands.player, `${fieldName}.hands.player`).entries()) {
+    validateCard(card, `${fieldName}.hands.player[${cardIndex}]`);
+  }
+  for (const [cardIndex, card] of requireArray(hands.banker, `${fieldName}.hands.banker`).entries()) {
+    validateCard(card, `${fieldName}.hands.banker[${cardIndex}]`);
+  }
+  requireFiniteNumber(hands.playerTotal, `${fieldName}.hands.playerTotal`);
+  requireFiniteNumber(hands.bankerTotal, `${fieldName}.hands.bankerTotal`);
+
+  if (snapshot.outcome !== null && !roundOutcomeSet.has(snapshot.outcome)) {
+    throw new ServerMessageParseError(`${fieldName}.outcome is not supported`);
+  }
+  requireServerString(snapshot.rulePackId, `${fieldName}.rulePackId`);
+  requireServerString(snapshot.rulePackVersion, `${fieldName}.rulePackVersion`);
+  requireNonNegativeInteger(snapshot.lastEventSeq, `${fieldName}.lastEventSeq`);
+  return snapshot as unknown as TableSnapshot;
+}
+
+function parseTableEvent(value: unknown): TableEvent {
+  const event = requireServerObject(value, "message.event");
+  asTableId(requireServerString(event.tableId, "message.event.tableId"));
+  asRoundId(requireServerString(event.roundId, "message.event.roundId"));
+  requireNonNegativeInteger(event.seq, "message.event.seq");
+  asActorId(requireServerString(event.actorId, "message.event.actorId"));
+  if (!tablePhaseSet.has(event.phaseAfter)) {
+    throw new ServerMessageParseError("message.event.phaseAfter is not supported");
+  }
+  requireServerString(event.rulePackId, "message.event.rulePackId");
+  requireServerString(event.rulePackVersion, "message.event.rulePackVersion");
+  requireFiniteNumber(event.at, "message.event.at");
+  return event as unknown as TableEvent;
+}
+
+/**
+ * Parse one untrusted server wire value. Required fields are validated while
+ * unknown fields are retained so additive protocol changes remain compatible.
+ */
+export function parseServerMessage(value: unknown): ServerMessage {
+  const message = requireServerObject(value, "message");
+  const type = requireServerString(message.type, "message.type");
+
+  switch (type) {
+    case "joined":
+      return {
+        ...message,
+        type,
+        tableId: asTableId(requireServerString(message.tableId, "message.tableId")),
+        actorId: asActorId(requireServerString(message.actorId, "message.actorId")),
+        protocolVersion: requireNonNegativeInteger(message.protocolVersion, "message.protocolVersion"),
+        snapshot: parseTableSnapshot(message.snapshot, "message.snapshot"),
+      } as JoinedMessage;
+    case "snapshot":
+      return {
+        ...message,
+        type,
+        snapshot: parseTableSnapshot(message.snapshot, "message.snapshot"),
+      } as SnapshotMessage;
+    case "event":
+      return { ...message, type, event: parseTableEvent(message.event) } as EventMessage;
+    case "error":
+      if (!isRoomErrorCode(message.code)) {
+        throw new ServerMessageParseError("message.code is not supported");
+      }
+      return {
+        ...message,
+        type,
+        code: message.code,
+        message: requireServerString(message.message, "message.message"),
+      } as ErrorMessage;
+    case "pong":
+      return {
+        ...message,
+        type,
+        nonce: requireFiniteNumber(message.nonce, "message.nonce"),
+      } as PongMessage;
+    default:
+      throw new ServerMessageParseError("message.type is not supported");
+  }
 }

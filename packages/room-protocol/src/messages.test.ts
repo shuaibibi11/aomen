@@ -3,9 +3,40 @@ import {
   ClientMessageParseError,
   ROOM_ERROR_CODES,
   ROOM_PROTOCOL_VERSION,
+  ServerMessageParseError,
   isRoomErrorCode,
   parseClientMessage,
+  parseServerMessage,
 } from "./messages.js";
+
+const validSnapshot = {
+  tableId: "table-1",
+  roundId: "round-1",
+  phase: "round_betting",
+  seats: [{ seatId: "seat-1", occupantId: "human-1", stack: 1_000 }],
+  bets: [{ seatId: "seat-1", betKind: "player", amount: 100 }],
+  hands: {
+    player: [],
+    banker: [],
+    playerTotal: 0,
+    bankerTotal: 0,
+  },
+  outcome: null,
+  rulePackId: "baccarat",
+  rulePackVersion: "1.0.0",
+  lastEventSeq: 1,
+};
+
+const validEvent = {
+  tableId: "table-1",
+  roundId: "round-1",
+  seq: 1,
+  actorId: "human-1",
+  phaseAfter: "round_betting",
+  rulePackId: "baccarat",
+  rulePackVersion: "1.0.0",
+  at: 100,
+};
 
 describe("client message parsing", () => {
   it("parses every supported client message and table intent", () => {
@@ -79,5 +110,58 @@ describe("room protocol error codes", () => {
     expect(isRoomErrorCode("internal_error")).toBe(true);
     expect(isRoomErrorCode("database_exploded")).toBe(false);
     expect(isRoomErrorCode(null)).toBe(false);
+  });
+});
+
+describe("server message parsing", () => {
+  it.each([
+    {
+      type: "joined",
+      tableId: "table-1",
+      actorId: "human-1",
+      protocolVersion: ROOM_PROTOCOL_VERSION,
+      snapshot: validSnapshot,
+    },
+    { type: "snapshot", snapshot: validSnapshot },
+    { type: "event", event: validEvent },
+    { type: "error", code: "room_unavailable", message: "try later" },
+    { type: "pong", nonce: 7 },
+  ])("parses supported server message $type", (message) => {
+    expect(parseServerMessage(message)).toEqual(message);
+  });
+
+  it.each([
+    null,
+    [],
+    {},
+    { type: "unknown" },
+    { type: "joined", tableId: "", actorId: "human-1", protocolVersion: 2, snapshot: validSnapshot },
+    { type: "joined", tableId: "table-1", actorId: "", protocolVersion: 2, snapshot: validSnapshot },
+    { type: "joined", tableId: "table-1", actorId: "human-1", protocolVersion: "2", snapshot: validSnapshot },
+    { type: "snapshot", snapshot: { ...validSnapshot, seats: "not-an-array" } },
+    { type: "snapshot", snapshot: { ...validSnapshot, phase: "invalid" } },
+    { type: "event", event: { ...validEvent, seq: -1 } },
+    { type: "event", event: { ...validEvent, actorId: "" } },
+    { type: "error", code: "future_code", message: "bad" },
+    { type: "error", code: "internal_error", message: "" },
+    { type: "pong", nonce: Number.NaN },
+  ])("rejects malformed server value %#", (value) => {
+    expect(() => parseServerMessage(value)).toThrow(ServerMessageParseError);
+  });
+
+  it("retains unknown top-level and payload fields for forward compatibility", () => {
+    const parsed = parseServerMessage({
+      type: "joined",
+      tableId: "table-1",
+      actorId: "human-1",
+      protocolVersion: ROOM_PROTOCOL_VERSION,
+      snapshot: { ...validSnapshot, publicConfig: { minimumBet: 10 } },
+      requestId: "request-1",
+    });
+
+    expect(parsed).toMatchObject({
+      requestId: "request-1",
+      snapshot: { publicConfig: { minimumBet: 10 } },
+    });
   });
 });
