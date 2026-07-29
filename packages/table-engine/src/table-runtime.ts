@@ -42,6 +42,7 @@ import {
 import {
   computeMainBetPayout,
   computeSideBetPayout,
+  isBetAmountSettlementSafe,
   isMainBet,
 } from "./baccarat/payout.js";
 import { ChipLedger } from "./chip-ledger.js";
@@ -165,6 +166,9 @@ export class TableRuntime {
     if (!this.seatIds.includes(seatId)) {
       return { accepted: false, rejectReason: "no_such_seat" };
     }
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      return { accepted: false, rejectReason: "invalid_bet_amount" };
+    }
     this.occupants.set(seatId, actorId);
     this.ledger.buyIn(seatId, amount);
     return { accepted: true };
@@ -205,11 +209,20 @@ export class TableRuntime {
     if (!supportedBetKinds.has(betKind)) {
       return { accepted: false, rejectReason: "unknown_bet_kind" };
     }
+    if (!this.isBetKindAvailable(betKind)) {
+      return { accepted: false, rejectReason: "bet_not_available" };
+    }
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      return { accepted: false, rejectReason: "invalid_bet_amount" };
+    }
     if (amount < this.rulePack.limits.min) {
       return { accepted: false, rejectReason: "bet_below_minimum" };
     }
     if (amount > this.rulePack.limits.max) {
       return { accepted: false, rejectReason: "bet_above_maximum" };
+    }
+    if (!isBetAmountSettlementSafe(betKind, amount, this.rulePack)) {
+      return { accepted: false, rejectReason: "invalid_bet_amount" };
     }
     if (!this.ledger.tryLockBet(seatId, amount)) {
       return { accepted: false, rejectReason: "insufficient_funds" };
@@ -385,6 +398,13 @@ export class TableRuntime {
       const payout = this.payoutForBet(bet, outcome, bankerTotal, playerPair, bankerPair);
       payoutBySeat.set(bet.seatId, (payoutBySeat.get(bet.seatId) ?? 0) + payout);
     }
+
+    for (const payout of payoutBySeat.values()) {
+      if (!Number.isSafeInteger(payout) || payout < 0) {
+        throw new Error(`settlement payout must be a non-negative safe integer, got ${payout}`);
+      }
+    }
+
     for (const [seatId, payout] of payoutBySeat) {
       this.ledger.applyPayout(seatId, payout);
     }
@@ -408,6 +428,13 @@ export class TableRuntime {
     }
     const isPair = bet.betKind === "player_pair" ? playerPair : bankerPair;
     return computeSideBetPayout(bet.betKind, bet.amount, isPair, this.rulePack).payout;
+  }
+
+  private isBetKindAvailable(betKind: BetKind): boolean {
+    if (betKind === "player" || betKind === "banker" || betKind === "tie") {
+      return true;
+    }
+    return this.rulePack.sideBets.some((sideBet) => sideBet.kind === betKind);
   }
 
   /** Append an event for a decided intent and return it. */

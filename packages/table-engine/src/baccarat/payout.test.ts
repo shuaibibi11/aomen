@@ -15,6 +15,7 @@ import type { RulePack } from "@mct/rule-packs";
 import {
   computeMainBetPayout,
   computeSideBetPayout,
+  isBetAmountSettlementSafe,
 } from "./payout.js";
 
 /** Standard 5%-commission pack. */
@@ -141,5 +142,26 @@ describe("computeSideBetPayout — pair bets", () => {
     const pack = standardPack();
     pack.sideBets = [];
     expect(() => computeSideBetPayout("player_pair", 100, true, pack)).toThrow();
+  });
+});
+
+describe("isBetAmountSettlementSafe", () => {
+  it("accepts a standard banker stake whose commissioned payout is integral", () => {
+    expect(isBetAmountSettlementSafe("banker", 100, standardPack())).toBe(true);
+  });
+
+  it("rejects a standard banker stake whose commissioned payout is fractional", () => {
+    expect(isBetAmountSettlementSafe("banker", 101, standardPack())).toBe(false);
+  });
+
+  it("rejects a no-commission banker stake that can settle fractionally on banker six", () => {
+    expect(isBetAmountSettlementSafe("banker", 101, noCommissionPack())).toBe(false);
+  });
+
+  it("accepts configured side bets and rejects unavailable side bets", () => {
+    const pack = standardPack();
+    expect(isBetAmountSettlementSafe("player_pair", 100, pack)).toBe(true);
+    pack.sideBets = [];
+    expect(isBetAmountSettlementSafe("player_pair", 100, pack)).toBe(false);
   });
 });

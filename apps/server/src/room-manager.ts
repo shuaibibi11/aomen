@@ -403,11 +403,11 @@ export class Room {
     }
 
     switch (intent.type) {
-      case "buy_in":
       case "place_bet":
       case "clear_bets":
-      case "cash_out":
         return intent.seatId === this.humanSeatId;
+      case "buy_in":
+      case "cash_out":
       case "start_round":
       case "no_more_bets":
       case "deal_next":

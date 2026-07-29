@@ -71,7 +71,9 @@ function noCommissionPack(): RulePack {
 const TABLE_ID = asTableId("table-1");
 const DEALER = asActorId("dealer");
 const ALICE = asActorId("alice");
+const BOB = asActorId("bob");
 const SEAT_1 = asSeatId("seat-1");
+const SEAT_2 = asSeatId("seat-2");
 
 interface RuntimeSetup {
   readonly pack?: RulePack;
@@ -285,6 +287,70 @@ describe("TableRuntime authorisation", () => {
     expect(rejected.accepted).toBe(false);
     expect(rejected.rejectReason).toBe("insufficient_funds");
   });
+
+  it("rejects unavailable side bets without locking chips or recording a bet", () => {
+    const pack = standardPack();
+    pack.sideBets = [];
+    const runtime = makeRuntime({ pack, cards: [c("9"), c("2"), c("K"), c("3")] });
+    runtime.submitIntent({ type: "buy_in", actorId: ALICE, seatId: SEAT_1, amount: 1000 });
+    runtime.submitIntent({ type: "start_round", actorId: DEALER });
+    const snapshotBefore = runtime.getSnapshot();
+
+    const rejected = runtime.submitIntent({
+      type: "place_bet",
+      actorId: ALICE,
+      seatId: SEAT_1,
+      betKind: "player_pair",
+      amount: 100,
+    });
+
+    expect(rejected.accepted).toBe(false);
+    expect(rejected.rejectReason).toBe("bet_not_available");
+    expect(runtime.getStack(SEAT_1)).toBe(1000);
+    expect(runtime.getSnapshot().bets).toEqual(snapshotBefore.bets);
+  });
+
+  it("rejects unsafe bet amounts before locking chips or recording a bet", () => {
+    const runtime = makeRuntime({ cards: [c("9"), c("2"), c("K"), c("3")] });
+    runtime.submitIntent({ type: "buy_in", actorId: ALICE, seatId: SEAT_1, amount: 1000 });
+    runtime.submitIntent({ type: "start_round", actorId: DEALER });
+    const snapshotBefore = runtime.getSnapshot();
+
+    const rejected = runtime.submitIntent({
+      type: "place_bet",
+      actorId: ALICE,
+      seatId: SEAT_1,
+      betKind: "banker",
+      amount: 101,
+    });
+
+    expect(rejected.accepted).toBe(false);
+    expect(rejected.rejectReason).toBe("invalid_bet_amount");
+    expect(runtime.getStack(SEAT_1)).toBe(1000);
+    expect(runtime.getSnapshot().bets).toEqual(snapshotBefore.bets);
+  });
+
+  it.each([0, -100, 100.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects non-positive or unsafe stake %s",
+    (amount) => {
+      const runtime = makeRuntime({ cards: [c("9"), c("2"), c("K"), c("3")] });
+      runtime.submitIntent({ type: "buy_in", actorId: ALICE, seatId: SEAT_1, amount: 1000 });
+      runtime.submitIntent({ type: "start_round", actorId: DEALER });
+
+      const rejected = runtime.submitIntent({
+        type: "place_bet",
+        actorId: ALICE,
+        seatId: SEAT_1,
+        betKind: "player",
+        amount,
+      });
+
+      expect(rejected.accepted).toBe(false);
+      expect(rejected.rejectReason).toBe("invalid_bet_amount");
+      expect(runtime.getStack(SEAT_1)).toBe(1000);
+      expect(runtime.getSnapshot().bets).toEqual([]);
+    },
+  );
 });
 
 describe("TableRuntime no-commission banker six", () => {
@@ -331,6 +397,33 @@ describe("TableRuntime side bets", () => {
 
     // 900 remaining + stake 100 + winnings 100 * 11 = 2100.
     expect(runtime.getStack(SEAT_1)).toBe(2100);
+  });
+
+  it("does not partially settle any seat when a payout becomes unsafe", () => {
+    const pack = standardPack();
+    const runtime = new TableRuntime({
+      tableId: TABLE_ID,
+      rulePack: pack,
+      dealerId: DEALER,
+      seatIds: [SEAT_1, SEAT_2],
+      drawCard: queueDrawer([c("5"), c("3"), c("5", "heart"), c("2"), c("4"), c("2", "heart")]),
+      now: () => 0,
+    });
+    runtime.submitIntent({ type: "buy_in", actorId: ALICE, seatId: SEAT_1, amount: 1000 });
+    runtime.submitIntent({ type: "buy_in", actorId: BOB, seatId: SEAT_2, amount: 1000 });
+    runtime.submitIntent({ type: "start_round", actorId: DEALER });
+    runtime.submitIntent({ type: "place_bet", actorId: ALICE, seatId: SEAT_1, betKind: "player_pair", amount: 100 });
+    runtime.submitIntent({ type: "place_bet", actorId: BOB, seatId: SEAT_2, betKind: "player_pair", amount: 100 });
+    pack.sideBets = [{ kind: "player_pair", payout: Number.MAX_SAFE_INTEGER }];
+    runtime.submitIntent({ type: "no_more_bets", actorId: DEALER });
+    runtime.submitIntent({ type: "deal_next", actorId: DEALER });
+    dealToSettling(runtime);
+
+    expect(() => runtime.submitIntent({ type: "settle_round", actorId: DEALER })).toThrow(
+      /non-negative safe integer/,
+    );
+    expect(runtime.getStack(SEAT_1)).toBe(900);
+    expect(runtime.getStack(SEAT_2)).toBe(900);
   });
 });
 

@@ -146,9 +146,32 @@ describe("RoomManager", () => {
     ).toBe(true);
     expect(
       room.isClientIntentAllowed({
+        type: "clear_bets",
+        actorId: HUMAN,
+        seatId: room.getHumanSeatId(),
+      }),
+    ).toBe(true);
+    expect(
+      room.isClientIntentAllowed({
         type: "buy_in",
         actorId: HUMAN,
+        seatId: room.getHumanSeatId(),
+        amount: 100,
+      }),
+    ).toBe(false);
+    expect(
+      room.isClientIntentAllowed({
+        type: "cash_out",
+        actorId: HUMAN,
+        seatId: room.getHumanSeatId(),
+      }),
+    ).toBe(false);
+    expect(
+      room.isClientIntentAllowed({
+        type: "place_bet",
+        actorId: HUMAN,
         seatId: aiSeatId!,
+        betKind: "player",
         amount: 100,
       }),
     ).toBe(false);

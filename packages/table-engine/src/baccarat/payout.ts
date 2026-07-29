@@ -37,6 +37,51 @@ function win(stake: number, winnings: number): PayoutResult {
   return { won: true, push: false, payout: stake + winnings };
 }
 
+function isNonNegativeSafeInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function isSafeSettlementForWinnings(stake: number, winnings: number): boolean {
+  return isNonNegativeSafeInteger(winnings) && isNonNegativeSafeInteger(stake + winnings);
+}
+
+/**
+ * Whether a bet can settle without fractional or unsafe chip arithmetic under
+ * every payout path that the current rule pack can produce for that bet kind.
+ */
+export function isBetAmountSettlementSafe(
+  betKind: BetKind,
+  stake: number,
+  pack: RulePack,
+): boolean {
+  if (!Number.isSafeInteger(stake) || stake <= 0) {
+    return false;
+  }
+
+  if (betKind === "player") {
+    return isSafeSettlementForWinnings(stake, stake * pack.mainPayouts.player);
+  }
+  if (betKind === "tie") {
+    return isSafeSettlementForWinnings(stake, stake * pack.mainPayouts.tie);
+  }
+  if (betKind === "banker") {
+    if (pack.variant === "no_commission") {
+      const regularBankerWinnings = stake * pack.mainPayouts.banker;
+      const bankerSixWinnings = stake * (pack.mainPayouts.bankerSixPayout ?? 0.5);
+      return (
+        isSafeSettlementForWinnings(stake, regularBankerWinnings) &&
+        isSafeSettlementForWinnings(stake, bankerSixWinnings)
+      );
+    }
+    const bankerWinningsAfterCommission =
+      stake * pack.mainPayouts.banker * (1 - pack.commission.rate);
+    return isSafeSettlementForWinnings(stake, bankerWinningsAfterCommission);
+  }
+
+  const sideBet = pack.sideBets.find((candidate) => candidate.kind === betKind);
+  return sideBet !== undefined && isSafeSettlementForWinnings(stake, stake * sideBet.payout);
+}
+
 /**
  * Settle a main bet (player, banker or tie).
  *

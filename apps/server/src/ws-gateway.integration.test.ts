@@ -161,6 +161,40 @@ async function waitForUpdate(client: WebSocketTestClient) {
 }
 
 describe("WsGateway real WebSocket integration", () => {
+  it("rejects repeated client buy-in and cash-out intents without changing runtime state", async () => {
+    const { roomManager, store, url } = await createSelfHostedGateway();
+    const room = createRoom(roomManager, "client-funding-boundary");
+    const client = await connect(url);
+    await join(client, room);
+    const actorId = room.getSnapshot().seats[0]!.occupantId;
+    const snapshotBefore = room.getSnapshot();
+    const eventCountBefore = store.count();
+
+    for (const intentType of ["buy_in", "cash_out", "buy_in", "cash_out"] as const) {
+      const requestId = `${intentType}-${store.count()}`;
+      client.send({
+        type: "submit_intent",
+        requestId,
+        intent: {
+          type: intentType,
+          actorId,
+          seatId: room.getHumanSeatId(),
+          ...(intentType === "buy_in" ? { amount: 100 } : {}),
+        },
+      });
+
+      expect(await client.waitForMessage(
+        (message) => message.type === "error" && message.requestId === requestId,
+      )).toMatchObject({
+        type: "error",
+        code: "intent_not_allowed",
+        requestId,
+      });
+      expect(room.getSnapshot()).toEqual(snapshotBefore);
+      expect(store.count()).toBe(eventCountBefore);
+    }
+  });
+
   it("replays an executed request across reconnects without submitting or broadcasting again", async () => {
     const { roomManager, store, url } = await createSelfHostedGateway();
     const room = createRoom(roomManager, "reconnect-idempotency");

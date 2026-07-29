@@ -98,7 +98,11 @@ describe("client message parsing", () => {
     { type: "submit_intent", requestId: "", intent: { type: "start_round", actorId: "human-1" } },
     { type: "submit_intent", intent: { type: "place_bet", actorId: "human-1", seatId: "seat-1", betKind: "dragon", amount: 100 } },
     { type: "submit_intent", intent: { type: "place_bet", actorId: "human-1", seatId: "seat-1", betKind: "player", amount: 0 } },
+    { type: "submit_intent", intent: { type: "place_bet", actorId: "human-1", seatId: "seat-1", betKind: "player", amount: 100.5 } },
+    { type: "submit_intent", intent: { type: "place_bet", actorId: "human-1", seatId: "seat-1", betKind: "player", amount: Number.MAX_SAFE_INTEGER + 1 } },
     { type: "submit_intent", intent: { type: "place_bet", actorId: "human-1", seatId: "seat-1", betKind: "player", amount: Number.POSITIVE_INFINITY } },
+    { type: "submit_intent", intent: { type: "buy_in", actorId: "human-1", seatId: "seat-1", amount: 100.5 } },
+    { type: "submit_intent", intent: { type: "buy_in", actorId: "human-1", seatId: "seat-1", amount: Number.MAX_SAFE_INTEGER + 1 } },
   ])("rejects malformed client value %#", (value) => {
     expect(() => parseClientMessage(value)).toThrow(ClientMessageParseError);
   });
@@ -210,6 +214,17 @@ describe("server message parsing", () => {
   ])("rejects malformed server value %#", (value) => {
     expect(() => parseServerMessage(value)).toThrow(ServerMessageParseError);
   });
+
+  it.each(["bet_not_available", "invalid_bet_amount"])(
+    "parses authoritative runtime reject reason %s",
+    (rejectReason) => {
+      expect(parseServerMessage({
+        type: "event",
+        roomInstanceId: "room-instance-1",
+        event: { ...validEvent, accepted: false, rejectReason },
+      })).toMatchObject({ event: { rejectReason } });
+    },
+  );
 
   it("retains unknown top-level and payload fields for forward compatibility", () => {
     const parsed = parseServerMessage({

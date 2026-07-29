@@ -35,6 +35,8 @@ export type RejectReason =
   | "insufficient_funds"
   | "no_such_seat"
   | "unknown_bet_kind"
+  | "bet_not_available"
+  | "invalid_bet_amount"
   | "unknown_intent";
 
 /**

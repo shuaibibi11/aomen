@@ -22,8 +22,12 @@ export type CommissionVariant = z.infer<typeof commissionVariantSchema>;
 /** Min/max bet limits, in training chips. */
 export const betLimitsSchema = z
   .object({
-    min: z.number().int().positive(),
-    max: z.number().int().positive(),
+    min: z.number().int().positive().refine(Number.isSafeInteger, {
+      message: "min must be a safe integer",
+    }),
+    max: z.number().int().positive().refine(Number.isSafeInteger, {
+      message: "max must be a safe integer",
+    }),
   })
   .refine((limits) => limits.max >= limits.min, {
     message: "max must be greater than or equal to min",
@@ -33,7 +37,7 @@ export type BetLimits = z.infer<typeof betLimitsSchema>;
 /** Commission settings. Only meaningful when variant is "standard". */
 export const commissionSchema = z.object({
   /** Fraction taken from a banker win, e.g. 0.05 for 5%. */
-  rate: z.number().min(0).max(1),
+  rate: z.number().finite().min(0).max(1),
 });
 export type CommissionRule = z.infer<typeof commissionSchema>;
 
@@ -41,20 +45,20 @@ export type CommissionRule = z.infer<typeof commissionSchema>;
 export const sideBetSchema = z.object({
   kind: z.enum(["player_pair", "banker_pair"]),
   /** Payout as a multiple of the stake, e.g. 11 for 11:1. */
-  payout: z.number().positive(),
+  payout: z.number().finite().positive(),
 });
 export type SideBetRule = z.infer<typeof sideBetSchema>;
 
 /** Main-bet payouts, as winnings-to-stake multiples. */
 export const mainPayoutsSchema = z.object({
-  player: z.number().positive(),
-  banker: z.number().positive(),
-  tie: z.number().positive(),
+  player: z.number().finite().positive(),
+  banker: z.number().finite().positive(),
+  tie: z.number().finite().positive(),
   /**
    * Payout for a banker win on a total of 6 under no-commission rules.
    * Ignored by the standard variant.
    */
-  bankerSixPayout: z.number().positive().optional(),
+  bankerSixPayout: z.number().finite().positive().optional(),
 });
 export type MainPayouts = z.infer<typeof mainPayoutsSchema>;
 
@@ -77,7 +81,9 @@ export const dealingSchema = z.object({
 export type DealingRule = z.infer<typeof dealingSchema>;
 
 /** One chip denomination in the pack's chip set. */
-export const chipDenominationSchema = z.number().int().positive();
+export const chipDenominationSchema = z.number().int().positive().refine(Number.isSafeInteger, {
+  message: "denomination must be a safe integer",
+});
 
 /** The chip set offered at the table, in training-chip values. */
 export const chipsetSchema = z.object({

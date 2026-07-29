@@ -161,6 +161,29 @@ describe("RemoteTableSession", () => {
     expect(connection.closed).toBe(true);
   });
 
+  it("surfaces an authoritative rejected bet without mutating the last snapshot", async () => {
+    const connection = new FakeConnection();
+    const session = await RemoteTableSession.create({ connection, commandTimeoutMs: 1_000 });
+    const command = session.placeBet(7, "banker", 101);
+    const sent = connection.sent[0]!;
+    const rejectedEvent: TableEvent = {
+      ...createAcceptedEvent(2),
+      intent: { type: "place_bet", actorId, seatId, betKind: "banker", amount: 101 },
+      accepted: false,
+      rejectReason: "invalid_bet_amount",
+    };
+
+    connection.emitMessage({
+      type: "intent_result",
+      roomInstanceId: joined.roomInstanceId,
+      requestId: sent.requestId,
+      event: rejectedEvent,
+    });
+
+    await expect(command).rejects.toThrow("invalid_bet_amount");
+    expect(session.getSnapshot()).toEqual(snapshot);
+  });
+
   it("pairs out-of-order event and snapshot once", async () => {
     const connection = new FakeConnection();
     const session = await RemoteTableSession.create({ connection, commandTimeoutMs: 1_000 });

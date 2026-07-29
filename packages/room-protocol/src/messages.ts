@@ -97,10 +97,14 @@ function requireNonEmptyString(value: unknown, fieldName: string): string {
   return value;
 }
 
-function requirePositiveAmount(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+function requirePositiveSafeIntegerAmount(value: unknown): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value <= 0
+  ) {
     throw new ClientMessageParseError(
-      "intent.amount must be a finite positive number",
+      "intent.amount must be a positive safe integer",
     );
   }
   return value;
@@ -122,7 +126,7 @@ function parseTableIntent(value: unknown): TableIntent {
         seatId: asSeatId(
           requireNonEmptyString(intent.seatId, "intent.seatId"),
         ),
-        amount: requirePositiveAmount(intent.amount),
+        amount: requirePositiveSafeIntegerAmount(intent.amount),
       } as TableIntent;
     case "place_bet": {
       if (!betKindSet.has(intent.betKind)) {
@@ -136,7 +140,7 @@ function parseTableIntent(value: unknown): TableIntent {
           requireNonEmptyString(intent.seatId, "intent.seatId"),
         ),
         betKind: intent.betKind,
-        amount: requirePositiveAmount(intent.amount),
+        amount: requirePositiveSafeIntegerAmount(intent.amount),
       } as TableIntent;
     }
     case "clear_bets":
@@ -326,6 +330,8 @@ const rejectReasonSet: ReadonlySet<unknown> = new Set([
   "insufficient_funds",
   "no_such_seat",
   "unknown_bet_kind",
+  "bet_not_available",
+  "invalid_bet_amount",
   "unknown_intent",
 ]);
 
