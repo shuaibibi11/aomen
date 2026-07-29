@@ -158,6 +158,8 @@ function createHarness(overrides: Partial<ConstructorParameters<typeof RoomConne
     tableId: asTableId("table-1"),
     actorId: asActorId("human-1"),
     credential: "room-secret",
+    connectTimeoutMs: 2_000,
+    joinTimeoutMs: 2_000,
     heartbeatIntervalMs: 1_000,
     pongTimeoutMs: 1_500,
     reconnectBaseDelayMs: 500,
@@ -183,6 +185,121 @@ function join(socket: FakeSocket): void {
 }
 
 describe("RoomConnection", () => {
+  it("rejects a connection that never opens and reconnects after backoff", async () => {
+    const { connection, sockets, clock } = createHarness();
+
+    const connectionPromise = connection.connect();
+    clock.advanceBy(2_000);
+
+    await expect(connectionPromise).rejects.toThrow("WebSocket connect timeout");
+    expect(sockets[0]?.closeCalls).toBe(1);
+    expect(connection.snapshot.state).toBe("reconnecting");
+    expect(clock.nextDelayMs).toBe(500);
+
+    clock.advanceBy(500);
+    expect(sockets).toHaveLength(2);
+  });
+
+  it("rejects a connection that opens but never joins", async () => {
+    const { connection, sockets, clock } = createHarness();
+
+    const connectionPromise = connection.connect();
+    sockets[0]?.open();
+    clock.advanceBy(2_000);
+
+    await expect(connectionPromise).rejects.toThrow("WebSocket join timeout");
+    expect(sockets[0]?.closeCalls).toBe(1);
+    expect(connection.snapshot.state).toBe("reconnecting");
+    expect(clock.nextDelayMs).toBe(500);
+  });
+
+  it("does not let an old handshake timeout close a newer socket", () => {
+    const { connection, sockets, clock } = createHarness({
+      connectTimeoutMs: 1_000,
+      joinTimeoutMs: 2_000,
+    });
+
+    void connection.connect().catch(() => undefined);
+    clock.advanceBy(1_000);
+    clock.advanceBy(500);
+    sockets[1]?.open();
+    clock.advanceBy(500);
+
+    expect(sockets[1]?.closeCalls).toBe(0);
+    expect(connection.snapshot.state).toBe("joining");
+  });
+
+  it("waits for a fresh join when connect is called during reconnection", async () => {
+    const { connection, sockets, clock } = createHarness();
+    const firstSnapshot = { ...snapshot, lastEventSeq: 1 } as TableSnapshot;
+    const rejoinedSnapshot = { ...snapshot, lastEventSeq: 2 } as TableSnapshot;
+    const initialConnectionPromise = connection.connect();
+    sockets[0]?.open();
+    sockets[0]?.message({
+      type: "joined",
+      tableId: "table-1",
+      actorId: "human-1",
+      protocolVersion: ROOM_PROTOCOL_VERSION,
+      snapshot: firstSnapshot,
+    });
+    await expect(initialConnectionPromise).resolves.toEqual(firstSnapshot);
+
+    sockets[0]?.closeFromNetwork();
+    const reconnectionPromise = connection.connect();
+    const duplicateReconnectionPromise = connection.connect();
+    expect(reconnectionPromise).toBe(duplicateReconnectionPromise);
+    let reconnectionSettled = false;
+    void reconnectionPromise.finally(() => { reconnectionSettled = true; });
+    await Promise.resolve();
+    expect(reconnectionSettled).toBe(false);
+
+    clock.advanceBy(500);
+    sockets[1]?.open();
+    sockets[1]?.message({
+      type: "joined",
+      tableId: "table-1",
+      actorId: "human-1",
+      protocolVersion: ROOM_PROTOCOL_VERSION,
+      snapshot: rejoinedSnapshot,
+    });
+
+    await expect(reconnectionPromise).resolves.toEqual(rejoinedSnapshot);
+  });
+
+  it("returns the last joined snapshot immediately while connected", async () => {
+    const { connection, sockets } = createHarness();
+    const joinedSnapshot = { ...snapshot, lastEventSeq: 3 } as TableSnapshot;
+    const initialConnectionPromise = connection.connect();
+    sockets[0]?.open();
+    sockets[0]?.message({
+      type: "joined",
+      tableId: "table-1",
+      actorId: "human-1",
+      protocolVersion: ROOM_PROTOCOL_VERSION,
+      snapshot: joinedSnapshot,
+    });
+    await initialConnectionPromise;
+
+    await expect(connection.connect()).resolves.toStrictEqual(joinedSnapshot);
+  });
+
+  it("rejects a reconnection waiter and clears handshake timers when closed", async () => {
+    const { connection, sockets, clock } = createHarness();
+    const initialConnectionPromise = connection.connect();
+    join(sockets[0]!);
+    await initialConnectionPromise;
+    sockets[0]?.closeFromNetwork();
+    const reconnectionPromise = connection.connect();
+
+    clock.advanceBy(500);
+    expect(sockets).toHaveLength(2);
+    connection.dispose();
+
+    await expect(reconnectionPromise).rejects.toBeInstanceOf(RoomConnectionUnavailableError);
+    expect(connection.snapshot.state).toBe("closed");
+    expect(clock.pendingTaskCount).toBe(0);
+  });
+
   it("connects, authenticates its join, and resolves the bootstrap snapshot", async () => {
     const { connection, sockets } = createHarness();
     const states: string[] = [];
@@ -594,6 +711,8 @@ describe("RoomConnection", () => {
   });
 
   it.each([
+    { connectTimeoutMs: 0 },
+    { joinTimeoutMs: Number.POSITIVE_INFINITY },
     { heartbeatIntervalMs: 0 },
     { pongTimeoutMs: 0 },
     { reconnectBaseDelayMs: -1 },

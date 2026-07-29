@@ -41,6 +41,8 @@ export interface RoomConnectionConfig {
   readonly tableId: TableId;
   readonly actorId: ActorId;
   readonly credential: string;
+  readonly connectTimeoutMs: number;
+  readonly joinTimeoutMs: number;
   readonly heartbeatIntervalMs: number;
   readonly pongTimeoutMs: number;
   readonly reconnectBaseDelayMs: number;
@@ -84,7 +86,7 @@ interface ActiveSocket {
   readonly listeners: SocketListeners;
 }
 
-interface BootstrapPromise {
+interface ConnectionWaiter {
   readonly promise: Promise<TableSnapshot>;
   readonly resolve: (snapshot: TableSnapshot) => void;
   readonly reject: (error: Error) => void;
@@ -103,11 +105,19 @@ function validatePositiveTiming(value: number, fieldName: string): void {
   }
 }
 
+function validatePositiveFiniteNumber(value: number, fieldName: string): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new RangeError(`${fieldName} must be a positive finite number`);
+  }
+}
+
 function validateConfig(config: RoomConnectionConfig): void {
   validateNonEmptyString(config.url, "url");
   validateNonEmptyString(config.tableId, "tableId");
   validateNonEmptyString(config.actorId, "actorId");
   validateNonEmptyString(config.credential, "credential");
+  validatePositiveFiniteNumber(config.connectTimeoutMs, "connectTimeoutMs");
+  validatePositiveFiniteNumber(config.joinTimeoutMs, "joinTimeoutMs");
   validatePositiveTiming(config.heartbeatIntervalMs, "heartbeatIntervalMs");
   validatePositiveTiming(config.pongTimeoutMs, "pongTimeoutMs");
   validatePositiveTiming(config.reconnectBaseDelayMs, "reconnectBaseDelayMs");
@@ -124,7 +134,7 @@ function validateConfig(config: RoomConnectionConfig): void {
   }
 }
 
-function createBootstrapPromise(): BootstrapPromise {
+function createConnectionWaiter(): ConnectionWaiter {
   let resolvePromise: (snapshot: TableSnapshot) => void = () => undefined;
   let rejectPromise: (error: Error) => void = () => undefined;
   const promise = new Promise<TableSnapshot>((resolve, reject) => {
@@ -156,12 +166,15 @@ export class RoomConnection {
   });
   private activeSocket: ActiveSocket | null = null;
   private reconnectTimer: unknown | null = null;
+  private handshakeTimer: unknown | null = null;
   private heartbeatTimer: unknown | null = null;
   private outstandingPingNonce: number | null = null;
   private outstandingPingSentAt: number | null = null;
   private nextPingNonce = 1;
   private socketGeneration = 0;
-  private bootstrap: BootstrapPromise | null = null;
+  private connectionWaiter: ConnectionWaiter | null = null;
+  private lastJoinedSnapshot: TableSnapshot | null = null;
+  private transportRecoveryInProgress = false;
   private permanentlyClosed = false;
 
   constructor(config: RoomConnectionConfig) {
@@ -196,13 +209,22 @@ export class RoomConnection {
     if (this.permanentlyClosed) {
       return Promise.reject(new RoomConnectionUnavailableError("Room connection is permanently closed"));
     }
-    if (this.bootstrap !== null) {
-      return this.bootstrap.promise;
+    if (this.stateSnapshot.state === "connected" && this.lastJoinedSnapshot !== null) {
+      return Promise.resolve(this.lastJoinedSnapshot);
+    }
+    if (this.connectionWaiter !== null) {
+      return this.connectionWaiter.promise;
     }
 
-    this.bootstrap = createBootstrapPromise();
-    this.openSocket(false);
-    return this.bootstrap.promise;
+    this.connectionWaiter = createConnectionWaiter();
+    if (
+      this.activeSocket === null
+      && this.reconnectTimer === null
+      && !this.transportRecoveryInProgress
+    ) {
+      this.openSocket(false);
+    }
+    return this.connectionWaiter.promise;
   }
 
   sendClientMessage(message: ClientMessage): void {
@@ -228,6 +250,7 @@ export class RoomConnection {
     this.permanentlyClosed = true;
     this.socketGeneration += 1;
     this.clearReconnectTimer();
+    this.clearHandshakeTimer();
     this.clearHeartbeatTimer();
     this.outstandingPingNonce = null;
     this.outstandingPingSentAt = null;
@@ -238,10 +261,7 @@ export class RoomConnection {
       this.detachSocketListeners(activeSocket);
       this.safeClose(activeSocket.socket, 1000, MANUAL_CLOSE_REASON);
     }
-    if (this.bootstrap !== null && !this.bootstrap.settled) {
-      this.bootstrap.settled = true;
-      this.bootstrap.reject(new RoomConnectionUnavailableError("Room connection closed before joining"));
-    }
+    this.rejectConnectionWaiter(new RoomConnectionUnavailableError("Room connection closed before joining"));
     this.transitionState("closed");
     this.stateListeners.clear();
     this.messageListeners.clear();
@@ -285,6 +305,7 @@ export class RoomConnection {
     socket.addEventListener("message", listeners.message);
     socket.addEventListener("close", listeners.close);
     socket.addEventListener("error", listeners.error);
+    this.startHandshakeTimer(generation, "connect", this.config.connectTimeoutMs);
   }
 
   private handleOpen(generation: number): void {
@@ -292,6 +313,7 @@ export class RoomConnection {
     if (activeSocket === null) {
       return;
     }
+    this.clearHandshakeTimer();
     this.transitionState("joining");
     if (!this.isCurrentSocket(activeSocket)) {
       return;
@@ -303,6 +325,9 @@ export class RoomConnection {
         actorId: this.config.actorId,
         credential: this.config.credential,
       });
+      if (this.isCurrentSocket(activeSocket)) {
+        this.startHandshakeTimer(generation, "join", this.config.joinTimeoutMs);
+      }
     } catch {
       // sendSerialized already converted this generation's send error into transport recovery.
     }
@@ -369,6 +394,7 @@ export class RoomConnection {
     }
 
     if (message.type === "joined") {
+      this.clearHandshakeTimer();
       this.updateSnapshot({
         state: "connected",
         lastMessageAt: receivedAt,
@@ -379,10 +405,8 @@ export class RoomConnection {
         return;
       }
       this.startHeartbeat();
-      if (this.bootstrap !== null && !this.bootstrap.settled) {
-        this.bootstrap.settled = true;
-        this.bootstrap.resolve(message.snapshot);
-      }
+      this.lastJoinedSnapshot = message.snapshot;
+      this.resolveConnectionWaiter(message.snapshot);
     }
   }
 
@@ -437,6 +461,7 @@ export class RoomConnection {
     this.socketGeneration += 1;
     this.activeSocket = null;
     this.detachSocketListeners(activeSocket);
+    this.clearHandshakeTimer();
     this.clearHeartbeatTimer();
     if (activeSocket.socket.readyState <= WEB_SOCKET_OPEN_STATE) {
       this.safeClose(activeSocket.socket, JOIN_REJECTED_CLOSE_CODE, JOIN_REJECTED_CLOSE_REASON);
@@ -450,7 +475,7 @@ export class RoomConnection {
     if (this.permanentlyClosed || this.socketGeneration !== recoveryGeneration) {
       return;
     }
-    this.rejectBootstrap(rejectionError);
+    this.rejectConnectionWaiter(rejectionError);
     this.transitionState("disconnected");
     if (this.permanentlyClosed || this.socketGeneration !== recoveryGeneration) {
       return;
@@ -461,14 +486,24 @@ export class RoomConnection {
     }
   }
 
-  private rejectBootstrap(error: Error): void {
-    const bootstrap = this.bootstrap;
-    if (bootstrap === null || bootstrap.settled) {
+  private rejectConnectionWaiter(error: Error): void {
+    const connectionWaiter = this.connectionWaiter;
+    if (connectionWaiter === null || connectionWaiter.settled) {
       return;
     }
-    bootstrap.settled = true;
-    bootstrap.reject(error);
-    this.bootstrap = null;
+    connectionWaiter.settled = true;
+    this.connectionWaiter = null;
+    connectionWaiter.reject(error);
+  }
+
+  private resolveConnectionWaiter(snapshot: TableSnapshot): void {
+    const connectionWaiter = this.connectionWaiter;
+    if (connectionWaiter === null || connectionWaiter.settled) {
+      return;
+    }
+    connectionWaiter.settled = true;
+    this.connectionWaiter = null;
+    connectionWaiter.resolve(snapshot);
   }
 
   private startHeartbeat(): void {
@@ -523,29 +558,35 @@ export class RoomConnection {
       return;
     }
 
-    this.socketGeneration += 1;
-    this.activeSocket = null;
-    this.detachSocketListeners(activeSocket);
-    this.clearHeartbeatTimer();
-    this.outstandingPingNonce = null;
-    this.outstandingPingSentAt = null;
-    if (activeSocket.socket.readyState <= WEB_SOCKET_OPEN_STATE) {
-      this.safeClose(activeSocket.socket, HEARTBEAT_CLOSE_CODE, TRANSPORT_FAILURE_CLOSE_REASON);
+    this.transportRecoveryInProgress = true;
+    try {
+      this.socketGeneration += 1;
+      this.activeSocket = null;
+      this.detachSocketListeners(activeSocket);
+      this.clearHandshakeTimer();
+      this.clearHeartbeatTimer();
+      this.outstandingPingNonce = null;
+      this.outstandingPingSentAt = null;
+      if (activeSocket.socket.readyState <= WEB_SOCKET_OPEN_STATE) {
+        this.safeClose(activeSocket.socket, HEARTBEAT_CLOSE_CODE, TRANSPORT_FAILURE_CLOSE_REASON);
+      }
+      const recoveryGeneration = this.socketGeneration;
+      this.reportError(
+        error,
+        true,
+        () => !this.permanentlyClosed && this.socketGeneration === recoveryGeneration,
+      );
+      if (this.permanentlyClosed || this.socketGeneration !== recoveryGeneration) {
+        return;
+      }
+      this.transitionState("disconnected");
+      if (this.permanentlyClosed || this.socketGeneration !== recoveryGeneration) {
+        return;
+      }
+      this.scheduleReconnect();
+    } finally {
+      this.transportRecoveryInProgress = false;
     }
-    const recoveryGeneration = this.socketGeneration;
-    this.reportError(
-      error,
-      true,
-      () => !this.permanentlyClosed && this.socketGeneration === recoveryGeneration,
-    );
-    if (this.permanentlyClosed || this.socketGeneration !== recoveryGeneration) {
-      return;
-    }
-    this.transitionState("disconnected");
-    if (this.permanentlyClosed || this.socketGeneration !== recoveryGeneration) {
-      return;
-    }
-    this.scheduleReconnect();
   }
 
   private handleSocketCreationFailure(cause: unknown): void {
@@ -650,6 +691,34 @@ export class RoomConnection {
     if (this.heartbeatTimer !== null) {
       this.clock.clearTimeout(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+  }
+
+  private startHandshakeTimer(
+    generation: number,
+    phase: "connect" | "join",
+    timeoutMs: number,
+  ): void {
+    this.clearHandshakeTimer();
+    this.handshakeTimer = this.clock.setTimeout(() => {
+      this.handshakeTimer = null;
+      const activeSocket = this.getCurrentSocket(generation);
+      const handshakeStillPending = phase === "connect"
+        ? activeSocket?.socket.readyState !== WEB_SOCKET_OPEN_STATE
+        : this.stateSnapshot.state === "joining";
+      if (activeSocket === null || !handshakeStillPending) {
+        return;
+      }
+      const timeoutError = new Error(`WebSocket ${phase} timeout`);
+      this.rejectConnectionWaiter(timeoutError);
+      this.handleTransportFailure(generation, timeoutError);
+    }, timeoutMs);
+  }
+
+  private clearHandshakeTimer(): void {
+    if (this.handshakeTimer !== null) {
+      this.clock.clearTimeout(this.handshakeTimer);
+      this.handshakeTimer = null;
     }
   }
 
