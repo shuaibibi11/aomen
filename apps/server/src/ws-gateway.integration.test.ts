@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import type { RulePack } from "@mct/rule-packs";
 import type { ServerMessage } from "@mct/room-protocol";
 import { asActorId, asTableId, SYSTEM_DEALER } from "@mct/shared";
@@ -13,6 +13,63 @@ const JOIN_CREDENTIAL = "integration-credential";
 const openClients: WebSocketTestClient[] = [];
 const openGateways: WsGateway[] = [];
 const runningSchedulers: AutomaticRoundScheduler[] = [];
+
+async function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMilliseconds: number,
+  description: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`Timed out waiting for ${description}`));
+    }, timeoutMilliseconds);
+  });
+
+  try {
+    return await Promise.race([operation, timeoutPromise]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function waitForSocketClose(socket: WebSocket): Promise<void> {
+  if (socket.readyState === WebSocket.CLOSED) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    socket.once("close", resolve);
+    socket.once("error", () => undefined);
+  });
+}
+
+async function verifyConnectionRefused(
+  url: string,
+  timeoutMilliseconds: number,
+): Promise<void> {
+  const socket = new WebSocket(url);
+  let connectionOpened = false;
+  socket.once("open", () => {
+    connectionOpened = true;
+    socket.terminate();
+  });
+
+  try {
+    await withTimeout(
+      waitForSocketClose(socket),
+      timeoutMilliseconds,
+      "connection refusal",
+    );
+    if (connectionOpened) {
+      throw new Error("WebSocket connection unexpectedly opened");
+    }
+  } finally {
+    if (socket.readyState !== WebSocket.CLOSED) {
+      socket.terminate();
+    }
+  }
+}
 
 afterEach(async () => {
   for (const scheduler of runningSchedulers.splice(0)) {
@@ -266,5 +323,70 @@ describe("WsGateway real WebSocket integration", () => {
 
     expect(() => gateway.getPort()).toThrow(/not listening/i);
     await expect(WebSocketTestClient.connect(url)).rejects.toThrow();
+  });
+
+  it("immediately closes a connection admitted after shutdown starts", async () => {
+    const roomManager = new RoomManager(new MemoryEventStore());
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    const gateway = new WsGateway({ roomManager, webSocketServer });
+    openGateways.push(gateway);
+    let handleSocketClose: (() => void) | undefined;
+    const racingSocket = {
+      on: vi.fn(),
+      once: vi.fn((eventName: string, listener: () => void) => {
+        if (eventName === "close") {
+          handleSocketClose = listener;
+        }
+      }),
+      readyState: WebSocket.OPEN,
+      terminate: vi.fn(() => handleSocketClose?.()),
+    } as unknown as WebSocket;
+
+    const closePromise = gateway.close();
+    webSocketServer.emit("connection", racingSocket, {});
+    await closePromise;
+
+    expect(racingSocket.terminate).toHaveBeenCalledOnce();
+    expect(racingSocket.on).not.toHaveBeenCalled();
+  });
+
+  it("rejects a connection racing with shutdown and closes within a bounded time", async () => {
+    let allowUpgrade!: () => void;
+    let signalUpgradePending!: () => void;
+    const upgradePending = new Promise<void>((resolve) => {
+      signalUpgradePending = resolve;
+    });
+    const webSocketServer = new WebSocketServer({
+      port: 0,
+      verifyClient: (_info, completeVerification) => {
+        allowUpgrade = () => completeVerification(true);
+        signalUpgradePending();
+      },
+    });
+    const gateway = new WsGateway({
+      roomManager: new RoomManager(new MemoryEventStore()),
+      webSocketServer,
+    });
+    openGateways.push(gateway);
+    await gateway.waitUntilListening();
+    const url = `ws://127.0.0.1:${gateway.getPort()}`;
+    const racingSocket = new WebSocket(url);
+
+    try {
+      await withTimeout(upgradePending, 1_000, "racing upgrade admission");
+      const closePromise = gateway.close();
+      allowUpgrade();
+
+      await withTimeout(closePromise, 1_000, "gateway shutdown");
+      await withTimeout(waitForSocketClose(racingSocket), 1_000, "racing socket close");
+
+      expect(racingSocket.readyState).toBe(WebSocket.CLOSED);
+      await verifyConnectionRefused(url, 1_000);
+    } finally {
+      if (racingSocket.readyState !== WebSocket.CLOSED) {
+        racingSocket.terminate();
+      }
+      await gateway.close();
+    }
   });
 });

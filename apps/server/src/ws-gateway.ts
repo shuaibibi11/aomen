@@ -54,7 +54,11 @@ export class WsGateway {
   private readonly listeningPromise: Promise<void>;
   private readonly roomManager: RoomManager;
   private readonly onError: (error: unknown) => void;
+  private closing = false;
+  private serverCloseCompleted = false;
   private closePromise: Promise<void> | null = null;
+  private resolveClientDrain: (() => void) | null = null;
+  private readonly activeSockets = new Set<WebSocket>();
   /** Authoritative identity and table established by each successful join. */
   private readonly socketContexts = new Map<WebSocket, SocketContext>();
   private readonly roomSubscriptions = new Map<
@@ -142,6 +146,14 @@ export class WsGateway {
   }
 
   private handleConnection(socket: WebSocket): void {
+    this.activeSockets.add(socket);
+    if (this.closing) {
+      socket.once("close", () => this.handleSocketClosed(socket));
+      socket.once("error", (error) => this.reportError(error));
+      this.terminateSocket(socket);
+      return;
+    }
+
     socket.on("error", (error) => this.reportError(error));
     socket.on("message", (raw) => {
       try {
@@ -156,12 +168,26 @@ export class WsGateway {
       }
     });
     socket.on("close", () => {
+      this.handleSocketClosed(socket);
       const context = this.socketContexts.get(socket);
       this.socketContexts.delete(socket);
       if (context !== undefined) {
         this.removeUnusedRoomSubscription(context.tableId);
       }
     });
+  }
+
+  private handleSocketClosed(socket: WebSocket): void {
+    this.activeSockets.delete(socket);
+    this.resolveClientDrainIfComplete();
+  }
+
+  private terminateSocket(socket: WebSocket): void {
+    if (socket.readyState === WebSocket.CLOSED) {
+      this.handleSocketClosed(socket);
+      return;
+    }
+    socket.terminate();
   }
 
   private send(socket: WebSocket, message: ServerMessage): void {
@@ -372,30 +398,16 @@ export class WsGateway {
     if (this.closePromise !== null) {
       return this.closePromise;
     }
+    this.closing = true;
     this.closePromise = this.closeServer();
     return this.closePromise;
   }
 
   private async closeServer(): Promise<void> {
-    for (const unsubscribe of this.roomSubscriptions.values()) {
-      unsubscribe();
-    }
-    this.roomSubscriptions.clear();
-    this.socketContexts.clear();
-
-    const clientClosePromises = [...this.server.clients].map(
-      (socket) =>
-        new Promise<void>((resolve) => {
-          if (socket.readyState === WebSocket.CLOSED) {
-            resolve();
-            return;
-          }
-          socket.once("close", () => resolve());
-          socket.close();
-        }),
-    );
     const serverClosePromise = new Promise<void>((resolve, reject) => {
       this.server.close((error) => {
+        this.serverCloseCompleted = true;
+        this.resolveClientDrainIfComplete();
         if (error !== undefined && error.message !== "The server is not running") {
           reject(error);
           return;
@@ -403,7 +415,29 @@ export class WsGateway {
         resolve();
       });
     });
+    const clientDrainPromise = new Promise<void>((resolve) => {
+      this.resolveClientDrain = resolve;
+      this.resolveClientDrainIfComplete();
+    });
 
-    await Promise.all([...clientClosePromises, serverClosePromise]);
+    for (const unsubscribe of this.roomSubscriptions.values()) {
+      unsubscribe();
+    }
+    this.roomSubscriptions.clear();
+    this.socketContexts.clear();
+
+    for (const socket of this.server.clients) {
+      this.terminateSocket(socket);
+    }
+
+    await Promise.all([serverClosePromise, clientDrainPromise]);
+  }
+
+  private resolveClientDrainIfComplete(): void {
+    if (!this.serverCloseCompleted || this.activeSockets.size > 0) {
+      return;
+    }
+    this.resolveClientDrain?.();
+    this.resolveClientDrain = null;
   }
 }
