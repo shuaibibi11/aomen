@@ -132,6 +132,20 @@ export class Room {
     return event;
   }
 
+  /** Apply a lifecycle intent and stop before later automation on rejection. */
+  private applyAutomaticIntent(
+    intent: Parameters<TableRuntime["submitIntent"]>[0],
+  ): TableEvent {
+    const event = this.applyIntentAndStore(intent);
+    if (event.accepted !== true) {
+      const rejectReason = event.rejectReason ?? "unknown_reject_reason";
+      throw new Error(
+        `Automatic round intent ${intent.type} was rejected: ${rejectReason}`,
+      );
+    }
+    return event;
+  }
+
   /** Public passthrough for externally submitted intents (e.g. from a socket). */
   submitIntent(
     intent: Parameters<TableRuntime["submitIntent"]>[0],
@@ -153,32 +167,32 @@ export class Room {
    *
    * A human's bets are expected to have been submitted during the betting
    * window in a live setting; here the tick opens and closes betting itself so
-   * a round can be driven end to end without a socket.
+  * a round can be driven end to end without a socket.
    */
   playAutomaticRound(): void {
-    this.applyIntentAndStore({ type: "start_round", actorId: SYSTEM_DEALER });
+    this.applyAutomaticIntent({ type: "start_round", actorId: SYSTEM_DEALER });
 
     for (const seated of this.aiSeats) {
       const bet = seated.ai.decideBet();
       if (bet !== null) {
-        this.applyIntentAndStore(bet);
+        this.applyAutomaticIntent(bet);
       }
     }
 
-    this.applyIntentAndStore({ type: "no_more_bets", actorId: SYSTEM_DEALER });
+    this.applyAutomaticIntent({ type: "no_more_bets", actorId: SYSTEM_DEALER });
 
     // Deal until the runtime leaves the dealing phase.
     let guard = 0;
-    this.applyIntentAndStore({ type: "deal_next", actorId: SYSTEM_DEALER });
+    this.applyAutomaticIntent({ type: "deal_next", actorId: SYSTEM_DEALER });
     while (this.runtime.getSnapshot().phase === "dealing") {
-      this.applyIntentAndStore({ type: "deal_next", actorId: SYSTEM_DEALER });
+      this.applyAutomaticIntent({ type: "deal_next", actorId: SYSTEM_DEALER });
       guard += 1;
       if (guard > 12) {
         throw new Error("deal did not reach settling");
       }
     }
 
-    this.applyIntentAndStore({ type: "settle_round", actorId: SYSTEM_DEALER });
+    this.applyAutomaticIntent({ type: "settle_round", actorId: SYSTEM_DEALER });
   }
 }
 
@@ -192,6 +206,10 @@ export class RoomManager {
 
   /** Create a room, seat and fund its actors, and return it. */
   createRoom(options: CreateRoomOptions): Room {
+    if (this.rooms.has(options.tableId)) {
+      throw new Error(`Room already exists for table ${options.tableId}`);
+    }
+
     const room = new Room(options, this.store);
     this.rooms.set(options.tableId, room);
     return room;

@@ -45,4 +45,16 @@ describe("MemoryEventStore", () => {
     expect(store.listByTable(asTableId("t2"))).toHaveLength(1);
     expect(store.count()).toBe(2);
   });
+
+  it("returns a copy that cannot mutate the stored event log", () => {
+    const store = new MemoryEventStore();
+    store.append(event("t1", 0));
+
+    const returnedEvents = store.listByTable(asTableId("t1")) as TableEvent[];
+    returnedEvents.push(event("t1", 1));
+
+    expect(returnedEvents).toHaveLength(2);
+    expect(store.listByTable(asTableId("t1"))).toHaveLength(1);
+    expect(store.count()).toBe(1);
+  });
 });

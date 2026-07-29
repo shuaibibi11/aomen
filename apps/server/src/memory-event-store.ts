@@ -32,7 +32,7 @@ export class MemoryEventStore implements EventStore {
   }
 
   listByTable(tableId: TableId): readonly TableEvent[] {
-    return this.byTable.get(tableId) ?? [];
+    return [...(this.byTable.get(tableId) ?? [])];
   }
 
   count(): number {

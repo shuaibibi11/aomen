@@ -6,7 +6,7 @@
  * event to the store. These run without opening a socket.
  */
 import { describe, expect, it } from "vitest";
-import { asActorId, asTableId } from "@mct/shared";
+import { asActorId, asTableId, SYSTEM_DEALER } from "@mct/shared";
 import type { RulePack } from "@mct/rule-packs";
 import { MemoryEventStore } from "./memory-event-store.js";
 import { RoomManager } from "./room-manager.js";
@@ -66,12 +66,47 @@ describe("RoomManager", () => {
     expect(buyIns).toHaveLength(3);
   });
 
+  it("rejects a duplicate table id without writing more buy-in events", () => {
+    const { manager, room, store } = createRoom();
+    const eventCountBeforeDuplicate = store.count();
+
+    expect(() =>
+      manager.createRoom({
+        tableId: TABLE_ID,
+        rulePack: devPack(),
+        humanActorId: asActorId("another-human"),
+        seatCount: 2,
+        aiCount: 1,
+        shoeSeed: "another-seed",
+      }),
+    ).toThrow(`Room already exists for table ${TABLE_ID}`);
+
+    expect(store.count()).toBe(eventCountBeforeDuplicate);
+    expect(manager.getRoom(TABLE_ID)).toBe(room);
+  });
+
   it("drives a full automatic round to a settled outcome", () => {
     const { room } = createRoom();
     room.playAutomaticRound();
     const snapshot = room.getSnapshot();
     expect(snapshot.phase).toBe("round_end");
     expect(snapshot.outcome).not.toBeNull();
+  });
+
+  it("stops an automatic round immediately when start_round is rejected", () => {
+    const { room, store } = createRoom();
+    room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+    const eventCountBeforeAutomaticRound = store.count();
+
+    expect(() => room.playAutomaticRound()).toThrow(
+      "Automatic round intent start_round was rejected: wrong_phase",
+    );
+
+    expect(store.count()).toBe(eventCountBeforeAutomaticRound + 1);
+    const lastEvent = store.listByTable(TABLE_ID).at(-1);
+    expect(lastEvent?.intent?.type).toBe("start_round");
+    expect(lastEvent?.accepted).toBe(false);
+    expect(lastEvent?.rejectReason).toBe("wrong_phase");
   });
 
   it("appends every accepted engine event to the store", () => {
@@ -121,11 +156,37 @@ describe("RoomManager", () => {
     expect(new Set(aiActorIds).size).toBe(aiActorIds.length);
   });
 
-  it("produces the same outcome for the same seed", () => {
+  it("repeats AI bets and revealed cards for the same seed", () => {
     const first = createRoom();
     first.room.playAutomaticRound();
     const second = createRoom();
     second.room.playAutomaticRound();
+
+    const selectDeterministicRoundEvents = (store: MemoryEventStore) =>
+      store
+        .listByTable(TABLE_ID)
+        .filter(
+          (event) =>
+            event.intent?.type === "place_bet" ||
+            (event.cardsRevealed?.length ?? 0) > 0,
+        )
+        .map((event) => ({
+          intent: event.intent,
+          cardsRevealed: event.cardsRevealed,
+          accepted: event.accepted,
+          phaseAfter: event.phaseAfter,
+        }));
+
+    const firstEvents = selectDeterministicRoundEvents(first.store);
+    const secondEvents = selectDeterministicRoundEvents(second.store);
+
+    expect(firstEvents).toEqual(secondEvents);
+    expect(firstEvents.some((event) => event.intent?.type === "place_bet")).toBe(
+      true,
+    );
+    expect(
+      firstEvents.some((event) => (event.cardsRevealed?.length ?? 0) > 0),
+    ).toBe(true);
     expect(first.room.getSnapshot().outcome).toBe(
       second.room.getSnapshot().outcome,
     );
