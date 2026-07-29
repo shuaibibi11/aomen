@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { PreviewApp } from "./preview-app.js";
 
 interface PreviewAppLifecycleHarness {
-  activeMode: "table-mass";
+  activeMode: "chip-set" | "table-mass";
+  activeCasinoId: "sands-venetian";
+  turntableEnabled: boolean;
+  contentGroup: { rotation: { y: number } };
   contentBuildSequence: number;
   tableCommandPending: boolean;
   betInteraction: {
@@ -16,10 +19,12 @@ interface PreviewAppLifecycleHarness {
   disposeContent: () => void;
   buildFullTable: () => Promise<void>;
   updateInfoPanel: () => void;
+  frameActiveContent: () => void;
   onCommandError: ((error: unknown) => void) | null;
   onTableStateChanged: (() => void) | null;
   rebuildContent: () => void;
   rebuildContentAsync: () => Promise<void>;
+  setMode: (mode: "table-mass") => void;
   playRoundToSettlement: () => Promise<void>;
   clearGuestSeatBets: () => Promise<void>;
 }
@@ -38,6 +43,9 @@ function createDeferred(): {
 function createLifecycleHarness(): PreviewAppLifecycleHarness {
   const previewApp = Object.create(PreviewApp.prototype) as PreviewAppLifecycleHarness;
   previewApp.activeMode = "table-mass";
+  previewApp.activeCasinoId = "sands-venetian";
+  previewApp.turntableEnabled = true;
+  previewApp.contentGroup = { rotation: { y: 0 } };
   previewApp.contentBuildSequence = 0;
   previewApp.tableCommandPending = true;
   previewApp.betInteraction = {
@@ -51,12 +59,73 @@ function createLifecycleHarness(): PreviewAppLifecycleHarness {
   previewApp.disposeContent = vi.fn();
   previewApp.buildFullTable = vi.fn().mockResolvedValue(undefined);
   previewApp.updateInfoPanel = vi.fn();
+  previewApp.frameActiveContent = vi.fn();
   previewApp.onCommandError = null;
   previewApp.onTableStateChanged = null;
   return previewApp;
 }
 
 describe("PreviewApp asynchronous rebuild lifecycle", () => {
+  it("notifies when the first table session finishes building", async () => {
+    const factoryResult = createDeferred();
+    const previewApp = createLifecycleHarness();
+    const onTableStateChanged = vi.fn();
+    previewApp.activeMode = "chip-set";
+    previewApp.betInteraction = null;
+    previewApp.unsubscribeTableSession = null;
+    previewApp.onTableStateChanged = onTableStateChanged;
+    previewApp.buildFullTable = vi.fn(async () => {
+      await factoryResult.promise;
+      previewApp.betInteraction = {
+        dispose: vi.fn(),
+        playRoundToSettlement: vi.fn().mockResolvedValue(undefined),
+        clearSeatBets: vi.fn().mockResolvedValue(undefined),
+        getSession: () => ({ getGuestSeat: () => ({ label: 3 }) }),
+      };
+      previewApp.unsubscribeTableSession = vi.fn();
+    });
+
+    previewApp.setMode("table-mass");
+
+    expect(onTableStateChanged).toHaveBeenCalledOnce();
+    expect(previewApp.betInteraction).toBeNull();
+
+    factoryResult.resolve();
+    await vi.waitFor(() => expect(onTableStateChanged).toHaveBeenCalledTimes(2));
+
+    expect(previewApp.betInteraction).not.toBeNull();
+    expect(previewApp.tableCommandPending).toBe(false);
+    expect(previewApp.updateInfoPanel).toHaveBeenCalledOnce();
+  });
+
+  it("does not notify when a stale table build finishes", async () => {
+    const staleFactoryResult = createDeferred();
+    const previewApp = createLifecycleHarness();
+    const onTableStateChanged = vi.fn();
+    previewApp.onTableStateChanged = onTableStateChanged;
+    previewApp.buildFullTable = vi
+      .fn()
+      .mockImplementationOnce(() => staleFactoryResult.promise)
+      .mockImplementationOnce(async () => {
+        previewApp.betInteraction = {
+          dispose: vi.fn(),
+          playRoundToSettlement: vi.fn().mockResolvedValue(undefined),
+          clearSeatBets: vi.fn().mockResolvedValue(undefined),
+          getSession: () => ({ getGuestSeat: () => ({ label: 3 }) }),
+        };
+        previewApp.unsubscribeTableSession = vi.fn();
+      });
+
+    const staleRebuild = previewApp.rebuildContentAsync();
+    await previewApp.rebuildContentAsync();
+    expect(onTableStateChanged).toHaveBeenCalledOnce();
+
+    staleFactoryResult.resolve();
+    await staleRebuild;
+
+    expect(onTableStateChanged).toHaveBeenCalledOnce();
+  });
+
   it("disables the old interaction before a replacement factory settles", async () => {
     const factoryResult = createDeferred();
     const previewApp = createLifecycleHarness();

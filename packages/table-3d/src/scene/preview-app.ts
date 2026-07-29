@@ -332,6 +332,9 @@ export class PreviewApp {
 
       if (contentBuildSequence === this.contentBuildSequence) {
         this.updateInfoPanel();
+        if (this.betInteraction !== null && this.unsubscribeTableSession !== null) {
+          this.onTableStateChanged?.();
+        }
       }
     } catch (error) {
       if (contentBuildSequence !== this.contentBuildSequence) {
