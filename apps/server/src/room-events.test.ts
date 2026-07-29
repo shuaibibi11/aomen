@@ -39,6 +39,61 @@ function createRoomManagerWithRoom(tableName: string) {
 }
 
 describe("authoritative room updates", () => {
+  it("exposes subscriptions only through RoomManager", () => {
+    const { room } = createRoomManagerWithRoom("manager-only-subscription");
+
+    expect("subscribe" in room).toBe(false);
+  });
+
+  it("isolates listener failures and still reports an accepted submission", () => {
+    const listenerErrors: unknown[] = [];
+    const tableId = asTableId("listener-failure");
+    const roomManager = new RoomManager(new MemoryEventStore(), {
+      onListenerError: (error) => listenerErrors.push(error),
+    });
+    const room = roomManager.createRoom({
+      tableId,
+      rulePack: createRulePack(),
+      humanActorId: asActorId("listener-failure-human"),
+      seatCount: 1,
+      aiCount: 0,
+      shoeSeed: "listener-failure-seed",
+    });
+    const receivedUpdates: RoomUpdate[] = [];
+    roomManager.subscribe(tableId, () => {
+      throw new Error("observer failed");
+    });
+    roomManager.subscribe(tableId, (update) => receivedUpdates.push(update));
+
+    const event = room.submitIntent({
+      type: "start_round",
+      actorId: SYSTEM_DEALER,
+    });
+
+    expect(event.accepted).toBe(true);
+    expect(receivedUpdates).toHaveLength(1);
+    expect(receivedUpdates[0]?.event).toBe(event);
+    expect(listenerErrors).toHaveLength(1);
+    expect(listenerErrors[0]).toEqual(new Error("observer failed"));
+  });
+
+  it("publishes rejected events and their aligned snapshots", () => {
+    const { tableId, roomManager, room } = createRoomManagerWithRoom("rejected");
+    const updates: RoomUpdate[] = [];
+    roomManager.subscribe(tableId, (update) => updates.push(update));
+    room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
+
+    const rejectedEvent = room.submitIntent({
+      type: "start_round",
+      actorId: SYSTEM_DEALER,
+    });
+
+    expect(rejectedEvent.accepted).toBe(false);
+    expect(rejectedEvent.rejectReason).toBe("wrong_phase");
+    expect(updates.at(-1)?.event).toBe(rejectedEvent);
+    expect(updates.at(-1)?.snapshot.lastEventSeq).toBe(rejectedEvent.seq);
+  });
+
   it("publishes an event aligned with its authoritative snapshot", () => {
     const { tableId, roomManager, room } = createRoomManagerWithRoom("updates");
     const updates: RoomUpdate[] = [];

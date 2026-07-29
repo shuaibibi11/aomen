@@ -26,8 +26,10 @@ import type { RoomManager } from "./room-manager.js";
 import type { RoomUpdate, UnsubscribeRoomUpdates } from "./room-events.js";
 
 export interface WsGatewayOptions {
-  readonly port: number;
+  readonly port?: number;
+  readonly webSocketServer?: WebSocketServer;
   readonly roomManager: RoomManager;
+  readonly onError?: (error: unknown) => void;
 }
 
 interface SocketContext {
@@ -48,6 +50,7 @@ export function getIntentActorError(
 export class WsGateway {
   private readonly server: WebSocketServer;
   private readonly roomManager: RoomManager;
+  private readonly onError: (error: unknown) => void;
   /** Authoritative identity and table established by each successful join. */
   private readonly socketContexts = new Map<WebSocket, SocketContext>();
   private readonly roomSubscriptions = new Map<
@@ -56,13 +59,35 @@ export class WsGateway {
   >();
 
   constructor(options: WsGatewayOptions) {
+    if ((options.port === undefined) === (options.webSocketServer === undefined)) {
+      throw new Error("Provide exactly one of port or webSocketServer");
+    }
     this.roomManager = options.roomManager;
-    this.server = new WebSocketServer({ port: options.port });
+    this.onError =
+      options.onError ??
+      ((error) => {
+        console.error("WebSocket gateway error:", error);
+      });
+    this.server =
+      options.webSocketServer ?? new WebSocketServer({ port: options.port! });
+    this.server.on("error", (error) => this.reportError(error));
     this.server.on("connection", (socket) => this.handleConnection(socket));
   }
 
   private handleConnection(socket: WebSocket): void {
-    socket.on("message", (raw) => this.handleMessage(socket, raw.toString()));
+    socket.on("error", (error) => this.reportError(error));
+    socket.on("message", (raw) => {
+      try {
+        this.handleMessage(socket, raw.toString());
+      } catch (error) {
+        this.reportError(error);
+        this.send(socket, {
+          type: "error",
+          code: "internal_error",
+          message: "Message processing failed",
+        });
+      }
+    });
     socket.on("close", () => {
       const context = this.socketContexts.get(socket);
       this.socketContexts.delete(socket);
@@ -124,6 +149,17 @@ export class WsGateway {
       });
       return;
     }
+    if (!this.roomManager.isClientActorAllowed(tableId, actorId)) {
+      this.send(socket, {
+        type: "error",
+        code: "actor_not_allowed",
+        message: "This actor is not allowed to join the room",
+      });
+      return;
+    }
+
+    // Multiple sockets may bind to the same authorized human actor to support
+    // multiple tabs and reconnect overlap. Each remains bound to that actor.
     const previousContext = this.socketContexts.get(socket);
     this.socketContexts.set(socket, { tableId, actorId });
     this.ensureRoomSubscription(tableId);
@@ -175,11 +211,20 @@ export class WsGateway {
     try {
       room.submitIntent(message.intent);
     } catch (error) {
+      this.reportError(error);
       this.send(socket, {
         type: "error",
         code: "internal_error",
-        message: error instanceof Error ? error.message : "Intent submission failed",
+        message: "Intent submission failed",
       });
+    }
+  }
+
+  private reportError(error: unknown): void {
+    try {
+      this.onError(error);
+    } catch (reporterError) {
+      console.error("WebSocket gateway error reporter failed:", reporterError);
     }
   }
 

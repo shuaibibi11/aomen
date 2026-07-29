@@ -99,6 +99,7 @@ export type ServerMessageType = ServerMessage["type"];
 export type RoomErrorCode =
   | "unknown_room"
   | "not_joined"
+  | "actor_not_allowed"
   | "actor_mismatch"
   | "malformed_message"
   | "internal_error";

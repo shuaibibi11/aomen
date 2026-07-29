@@ -25,6 +25,7 @@ import { TableRuntime, createShoe } from "@mct/table-engine";
 import { BasicPlayerAi } from "./ai/basic-player-ai.js";
 import type { EventStore } from "./memory-event-store.js";
 import type {
+  RoomUpdate,
   RoomUpdateListener,
   UnsubscribeRoomUpdates,
 } from "./room-events.js";
@@ -50,6 +51,18 @@ interface SeatedAi {
   readonly ai: BasicPlayerAi;
 }
 
+export interface RoomListenerErrorContext {
+  readonly tableId: TableId;
+  readonly update: RoomUpdate;
+}
+
+export interface RoomManagerOptions {
+  readonly onListenerError?: (
+    error: unknown,
+    context: RoomListenerErrorContext,
+  ) => void;
+}
+
 /**
  * One live room: a runtime, its dealer, its seated actors and their AI.
  *
@@ -59,19 +72,19 @@ interface SeatedAi {
 export class Room {
   private readonly runtime: TableRuntime;
   private readonly humanSeatId: SeatId;
+  private readonly humanActorId: ActorId;
+  private readonly allowedClientActorIds: ReadonlySet<ActorId>;
   private readonly aiSeats: readonly SeatedAi[];
   private readonly store: EventStore;
-  private readonly listeners = new Set<RoomUpdateListener>();
 
   constructor(
     options: CreateRoomOptions,
     store: EventStore,
-    initialListener?: RoomUpdateListener,
+    private readonly publishUpdate: RoomUpdateListener,
   ) {
     this.store = store;
-    if (initialListener !== undefined) {
-      this.listeners.add(initialListener);
-    }
+    this.humanActorId = options.humanActorId;
+    this.allowedClientActorIds = new Set([options.humanActorId]);
 
     const seatIds = Array.from({ length: options.seatCount }, (_unused, index) =>
       asSeatId(`${options.tableId}-seat-${index + 1}`),
@@ -147,9 +160,9 @@ export class Room {
         `Room update sequence mismatch: event ${event.seq}, snapshot ${snapshot.lastEventSeq}`,
       );
     }
-    for (const listener of this.listeners) {
-      listener({ event, snapshot });
-    }
+    // Rejected engine submissions are authoritative events too. Publishing
+    // both event and snapshot lets every client inspect accepted/rejectReason.
+    this.publishUpdate({ event, snapshot });
     return event;
   }
 
@@ -182,11 +195,9 @@ export class Room {
     return this.humanSeatId;
   }
 
-  subscribe(listener: RoomUpdateListener): UnsubscribeRoomUpdates {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+  /** Whether an ordinary client socket may bind to this actor identity. */
+  isClientActorAllowed(actorId: ActorId): boolean {
+    return actorId === this.humanActorId && this.allowedClientActorIds.has(actorId);
   }
 
   /**
@@ -234,7 +245,21 @@ export class RoomManager {
     Set<RoomUpdateListener>
   >();
 
-  constructor(private readonly store: EventStore) {}
+  private readonly onListenerError: (
+    error: unknown,
+    context: RoomListenerErrorContext,
+  ) => void;
+
+  constructor(
+    private readonly store: EventStore,
+    options: RoomManagerOptions = {},
+  ) {
+    this.onListenerError =
+      options.onListenerError ??
+      ((error, context) => {
+        console.error(`Room listener failed for table ${context.tableId}:`, error);
+      });
+  }
 
   /** Create a room, seat and fund its actors, and return it. */
   createRoom(options: CreateRoomOptions): Room {
@@ -243,13 +268,7 @@ export class RoomManager {
     }
 
     const room = new Room(options, this.store, (update) => {
-      const listeners = this.listenersByTable.get(options.tableId);
-      if (listeners === undefined) {
-        return;
-      }
-      for (const listener of listeners) {
-        listener(update);
-      }
+      this.publishUpdate(options.tableId, update);
     });
     this.rooms.set(options.tableId, room);
     return room;
@@ -257,6 +276,11 @@ export class RoomManager {
 
   getRoom(tableId: TableId): Room | undefined {
     return this.rooms.get(tableId);
+  }
+
+  /** Read-only join authorization used by transport gateways. */
+  isClientActorAllowed(tableId: TableId, actorId: ActorId): boolean {
+    return this.rooms.get(tableId)?.isClientActorAllowed(actorId) ?? false;
   }
 
   subscribe(
@@ -277,5 +301,32 @@ export class RoomManager {
         this.listenersByTable.delete(tableId);
       }
     };
+  }
+
+  private publishUpdate(tableId: TableId, update: RoomUpdate): void {
+    const listeners = this.listenersByTable.get(tableId);
+    if (listeners === undefined) {
+      return;
+    }
+
+    for (const listener of listeners) {
+      try {
+        listener(update);
+      } catch (error) {
+        this.reportListenerError(error, { tableId, update });
+      }
+    }
+  }
+
+  private reportListenerError(
+    error: unknown,
+    context: RoomListenerErrorContext,
+  ): void {
+    try {
+      this.onListenerError(error, context);
+    } catch (reporterError) {
+      // Error reporting is observational and must never affect game delivery.
+      console.error("Room listener error reporter failed:", reporterError);
+    }
   }
 }

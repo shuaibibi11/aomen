@@ -48,6 +48,21 @@ function createRoom() {
 }
 
 describe("RoomManager", () => {
+  it("allows only the room's human actor to join as a client", () => {
+    const { manager, room } = createRoom();
+    const aiActorId = room
+      .getSnapshot()
+      .seats.map((seat) => seat.occupantId)
+      .find((actorId) => actorId !== null && actorId !== HUMAN);
+
+    expect(room.isClientActorAllowed(HUMAN)).toBe(true);
+    expect(manager.isClientActorAllowed(TABLE_ID, HUMAN)).toBe(true);
+    expect(manager.isClientActorAllowed(TABLE_ID, asActorId("intruder"))).toBe(false);
+    expect(aiActorId).toBeDefined();
+    expect(room.isClientActorAllowed(aiActorId!)).toBe(false);
+    expect(room.isClientActorAllowed(SYSTEM_DEALER)).toBe(false);
+  });
+
   it("funds every seat at creation", () => {
     const { room } = createRoom();
     const snapshot = room.getSnapshot();
