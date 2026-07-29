@@ -186,6 +186,53 @@ describe("TableRuntime naturals", () => {
 });
 
 describe("TableRuntime authorisation", () => {
+  it("rejects an overflowing buy-in without replacing the occupant or changing the stack", () => {
+    const runtime = makeRuntime({ cards: [c("9"), c("2"), c("K"), c("3")] });
+    runtime.submitIntent({
+      type: "buy_in",
+      actorId: ALICE,
+      seatId: SEAT_1,
+      amount: Number.MAX_SAFE_INTEGER,
+    });
+
+    const rejected = runtime.submitIntent({
+      type: "buy_in",
+      actorId: BOB,
+      seatId: SEAT_1,
+      amount: 1,
+    });
+
+    expect(rejected.accepted).toBe(false);
+    expect(rejected.rejectReason).toBe("invalid_chip_amount");
+    expect(runtime.getSnapshot().seats[0]).toEqual({
+      seatId: SEAT_1,
+      occupantId: ALICE,
+      stack: Number.MAX_SAFE_INTEGER,
+    });
+    expect(runtime.getEvents()).toContainEqual(rejected);
+  });
+
+  it("rejects a fractional buy-in without replacing the occupant or changing the stack", () => {
+    const runtime = makeRuntime({ cards: [c("9"), c("2"), c("K"), c("3")] });
+    runtime.submitIntent({ type: "buy_in", actorId: ALICE, seatId: SEAT_1, amount: 1000 });
+
+    const rejected = runtime.submitIntent({
+      type: "buy_in",
+      actorId: BOB,
+      seatId: SEAT_1,
+      amount: 1.5,
+    });
+
+    expect(rejected.accepted).toBe(false);
+    expect(rejected.rejectReason).toBe("invalid_chip_amount");
+    expect(runtime.getSnapshot().seats[0]).toEqual({
+      seatId: SEAT_1,
+      occupantId: ALICE,
+      stack: 1000,
+    });
+    expect(runtime.getEvents()).toContainEqual(rejected);
+  });
+
   it("rejects an unknown bet kind without locking chips or recording a bet", () => {
     const runtime = makeRuntime({ cards: [c("9"), c("2"), c("K"), c("3")] });
     runtime.submitIntent({ type: "buy_in", actorId: ALICE, seatId: SEAT_1, amount: 1000 });

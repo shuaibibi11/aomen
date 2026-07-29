@@ -195,11 +195,11 @@ export class TableRuntime {
     if (!this.seatIds.includes(seatId)) {
       return { accepted: false, rejectReason: "no_such_seat" };
     }
-    if (!Number.isSafeInteger(amount) || amount <= 0) {
-      return { accepted: false, rejectReason: "invalid_bet_amount" };
+    if (!this.ledger.canBuyIn(seatId, amount)) {
+      return { accepted: false, rejectReason: "invalid_chip_amount" };
     }
-    this.occupants.set(seatId, actorId);
     this.ledger.buyIn(seatId, amount);
+    this.occupants.set(seatId, actorId);
     return { accepted: true };
   }
 

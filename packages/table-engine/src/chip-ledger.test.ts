@@ -35,6 +35,16 @@ describe("ChipLedger buy-in", () => {
     expect(ledger.getStack(SEAT_1)).toBe(1500);
   });
 
+  it("reports whether a buy-in preserves a positive safe-integer stack", () => {
+    const ledger = new ChipLedger();
+    ledger.buyIn(SEAT_1, Number.MAX_SAFE_INTEGER - 1);
+
+    expect(ledger.canBuyIn(SEAT_1, 1)).toBe(true);
+    expect(ledger.canBuyIn(SEAT_1, 2)).toBe(false);
+    expect(ledger.canBuyIn(SEAT_1, 0)).toBe(false);
+    expect(ledger.canBuyIn(SEAT_1, 1.5)).toBe(false);
+  });
+
   it("rejects a buy-in that would overflow the accumulated stack", () => {
     const ledger = new ChipLedger();
     ledger.buyIn(SEAT_1, Number.MAX_SAFE_INTEGER);

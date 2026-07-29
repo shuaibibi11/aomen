@@ -215,7 +215,7 @@ describe("server message parsing", () => {
     expect(() => parseServerMessage(value)).toThrow(ServerMessageParseError);
   });
 
-  it.each(["bet_not_available", "invalid_bet_amount"])(
+  it.each(["bet_not_available", "invalid_bet_amount", "invalid_chip_amount"])(
     "parses authoritative runtime reject reason %s",
     (rejectReason) => {
       expect(parseServerMessage({

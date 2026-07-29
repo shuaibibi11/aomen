@@ -43,16 +43,26 @@ export class ChipLedger {
     return this.balances.get(seatId)?.locked ?? 0;
   }
 
+  /** Whether a buy-in would preserve a positive safe-integer stack. */
+  canBuyIn(seatId: SeatId, amount: number): boolean {
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      return false;
+    }
+    const resultingStack = this.getStack(seatId) + amount;
+    return Number.isSafeInteger(resultingStack);
+  }
+
   /** Add a buy-in to a seat's stack. */
   buyIn(seatId: SeatId, amount: number): void {
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       throw new Error(`buyIn amount must be a positive safe integer, got ${amount}`);
     }
-    const balance = this.balanceFor(seatId);
-    const resultingStack = balance.stack + amount;
-    if (!Number.isSafeInteger(resultingStack)) {
+    if (!this.canBuyIn(seatId, amount)) {
+      const resultingStack = this.getStack(seatId) + amount;
       throw new Error(`buyIn resulting stack must be a safe integer, got ${resultingStack}`);
     }
+    const balance = this.balanceFor(seatId);
+    const resultingStack = balance.stack + amount;
     balance.stack = resultingStack;
   }
 
