@@ -1,13 +1,13 @@
 # 当前开发进度
 
-**状态日期：2026-07-29**
+**状态日期：2026-07-30**
 
 ## Git 基线
 
-- 稳定基线：`master` at `5299b17`（`feat(room-protocol): websocket message contracts`）。
-- 本次验收分支：`feature/recover-current-work`；最终加固后的 validated commit 为 `ffb79c4`。
+- 稳定基线：`master` 已合并至 `2c00ef3`（架构与百家乐训练文档）；Socket + AI 实现包含后续 AI 取消加固。
+- 本次验收分支：`master`；最终验证的代码提交为 `2c00ef3`。
 - Phase 0-1 实现从 `755dc9a`（monorepo）到 `5299b17`（room protocol）建立共享类型、规则包、引擎、账本和协议。
-- Socket + AI 后续切片位于 `a030268..ffb79c4`，均为 `5299b17` 之后的线性提交。
+- Socket + AI 后续切片位于 `a030268..6afd82a`，均为 `5299b17` 之后的集成提交。
 
 ## Phase 0-1 Task 1-11
 
@@ -39,23 +39,24 @@
 | Remote authoritative session | 完成 | `f98acd9..1ecb8ae` |
 | Provider-neutral LLM AI boundary | 完成 | `3de3a73..dd90364` |
 | Authoritative bet and settlement hardening | 完成 | `d7abdb4..ffb79c4` |
+| AI cancellation and settled-decision cache hardening | 完成 | `8106f7c..6afd82a` |
 
 Basic AI 已经工作，会在下注阶段为 AI 席位产生合法决策。LLM 路径提供 provider-neutral 决策接口、输入/输出约束、超时、遥测清洗和 Basic AI fallback，但尚未集成 OpenAI、Anthropic 或其他供应商 SDK；不能把“边界已完成”表述为“供应商 LLM 已上线”。
 
 Remote session 的协议、客户端和真实 WebSocket 集成测试已经覆盖，但 table-3d 默认仍选择 local session。只有受信启动代码显式写入完整 `globalThis.__MCT_ROOM_CONFIG__` 时才启用 remote；credential 不得进入 query、日志或持久化存储。
 
-## 2026-07-29 本地实测
+## 2026-07-30 本地实测
 
-完整的环境、精确命令、退出结果、warnings、进程清理和证据边界见 [2026-07-29 本地验收记录](validation-2026-07-29.md)。该记录来自开发者工作站，不是 CI。
+完整的环境、精确命令、退出结果、warnings、进程清理和证据边界见 [2026-07-30 本地验收记录](validation-2026-07-29.md)。该记录来自开发者工作站，不是 CI。
 
 | 命令/检查 | 本地实测结果 |
 | --- | --- |
 | `pnpm install --frozen-lockfile` | 成功；lockfile unchanged；pnpm 提示 esbuild build script 未批准 |
-| `pnpm build` | 成功；7/7 workspace projects；table-3d chunk 751.34 kB / gzip 196.47 kB warning |
-| `pnpm test` | 35 test files / 536 tests passed |
+| `pnpm build` | 成功；7/7 workspace projects；table-3d chunk 751.74 kB / gzip 196.47 kB warning |
+| `pnpm test` | 35 test files / 545 tests passed |
 | `pnpm typecheck` | 7/7 workspace projects passed |
-| `pnpm --filter @mct/server test` | 11 files / 144 tests passed |
-| `pnpm --filter @mct/table-3d test` | 14 files / 177 tests passed |
+| `pnpm --filter @mct/server test` | 11 files / 149 tests passed |
+| `pnpm --filter @mct/table-3d test` | 14 files / 181 tests passed |
 | `pnpm --filter @mct/room-client test` | 1 file / 45 tests passed |
 | `pnpm --filter @mct/room-protocol test` | 1 file / 67 tests passed |
 | Server start smoke | 临时 `DEMO_ROOM_CREDENTIAL` + 随机空闲端口成功，PID/端口已清理 |

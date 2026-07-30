@@ -5,8 +5,8 @@
 ## 验收基线
 
 - 日期：2026-07-30
-- 分支：`feature/recover-current-work`
-- validated commit：`f70c8861e53664aaeb8651d5e46cce64a16cc3d3`
+- 分支：`master`
+- validated commit：`2c00ef37a4f67b7ff64c0590e727d9df35681472`
 - 操作系统：Windows
 - Node.js：`v22.17.0`
 - pnpm：`10.29.3`
@@ -19,11 +19,11 @@
 所有命令均从仓库根目录执行，并显式切换目录。下列命令退出码均为 `0`。
 
 ```powershell
-Set-Location "E:\澳门开发-worktrees\recover-current"; node -v; pnpm -v
-Set-Location "E:\澳门开发-worktrees\recover-current"; pnpm build
-Set-Location "E:\澳门开发-worktrees\recover-current"; pnpm test
-Set-Location "E:\澳门开发-worktrees\recover-current"; pnpm typecheck
-Set-Location "E:\澳门开发-worktrees\recover-current"; pnpm --filter @mct/table-3d test
+Set-Location "E:\澳门开发-worktrees\master-integration"; node -v; pnpm -v
+Set-Location "E:\澳门开发-worktrees\master-integration"; pnpm install --frozen-lockfile
+Set-Location "E:\澳门开发-worktrees\master-integration"; pnpm build
+Set-Location "E:\澳门开发-worktrees\master-integration"; pnpm test
+Set-Location "E:\澳门开发-worktrees\master-integration"; pnpm typecheck
 ```
 
 测试和构建摘要：
@@ -31,9 +31,9 @@ Set-Location "E:\澳门开发-worktrees\recover-current"; pnpm --filter @mct/tab
 | 检查 | 本地实测结果 |
 | --- | --- |
 | `pnpm build` | 7/7 workspace 项目成功 |
-| `pnpm test` | 35 个测试文件、538 个测试通过 |
+| `pnpm test` | 35 个测试文件、545 个测试通过 |
 | `pnpm typecheck` | 7/7 workspace 项目成功 |
-| `@mct/server` | 11 个测试文件、144 个测试通过（来自全仓测试） |
+| `@mct/server` | 11 个测试文件、149 个测试通过（来自全仓测试） |
 | `@mct/table-3d` | 14 个测试文件、181 个测试通过 |
 | `@mct/room-client` | 1 个测试文件、45 个测试通过（来自全仓测试） |
 | `@mct/room-protocol` | 1 个测试文件、67 个测试通过（来自全仓测试） |
