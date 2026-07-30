@@ -1,7 +1,11 @@
 import { createApp, type App } from "./app.js";
 import type { PersistenceRuntimeEnvironment } from "./persistence/persistence-runtime-config.js";
+import {
+  ServerTransport,
+  type ServerTransportOptions,
+} from "./server-transport.js";
 import { resolveServerStartupConfiguration } from "./server-startup-configuration.js";
-import { WsGateway } from "./ws-gateway.js";
+import type { ServerNetworkConfig } from "./server-network-config.js";
 
 type ShutdownSignal = "SIGINT" | "SIGTERM";
 
@@ -13,10 +17,13 @@ export interface GatewayLifecycle {
 
 export interface StartServerOptions {
   readonly port: number;
+  readonly host: ServerNetworkConfig["host"];
+  readonly allowedOrigin: string | undefined;
+  readonly maximumPayloadBytes: number;
   /** Allows tests and embedding hosts to supply startup settings explicitly. */
   readonly environment?: PersistenceRuntimeEnvironment;
   readonly createApplication?: () => Promise<App>;
-  readonly createGateway?: (app: App, port: number) => GatewayLifecycle;
+  readonly createTransport?: (options: ServerTransportOptions) => GatewayLifecycle;
   readonly log?: (message: string) => void;
   readonly reportShutdownError?: (error: unknown) => void;
   readonly addSignalListener?: (
@@ -35,9 +42,18 @@ export interface RunningServer {
   shutdown(): Promise<void>;
 }
 
-function formatListeningMessage(app: App, port: number): string {
+function formatUrlHost(host: ServerNetworkConfig["host"]): string {
+  return host.includes(":") ? `[${host}]` : host;
+}
+
+function formatListeningMessage(
+  app: App,
+  host: ServerNetworkConfig["host"],
+  port: number,
+): string {
+  const urlHost = formatUrlHost(host);
   return (
-    `Room server listening on ws://localhost:${port} ` +
+    `Room server listening on http://${urlHost}:${port} and ws://${urlHost}:${port}/ws ` +
     `(demo table "${app.demoTableId}", automatic timing ` +
     `betting=${app.automaticRoundTiming.bettingWindowMs}ms, ` +
     `card=${app.automaticRoundTiming.cardDealIntervalMs}ms, ` +
@@ -54,9 +70,8 @@ export async function startServer(
   resolveServerStartupConfiguration(options.environment ?? process.env);
 
   const createApplication = options.createApplication ?? createApp;
-  const createGateway =
-    options.createGateway ??
-    ((app, port) => new WsGateway({ port, roomManager: app.roomManager }));
+  const createTransport = options.createTransport ??
+    ((transportOptions: ServerTransportOptions) => new ServerTransport(transportOptions));
   const log = options.log ?? console.log;
   const reportShutdownError =
     options.reportShutdownError ??
@@ -72,26 +87,33 @@ export async function startServer(
     ((signal, listener) => process.off(signal, listener));
 
   const app = await createApplication();
-  let gateway: GatewayLifecycle | null = null;
+  let transport: GatewayLifecycle | null = null;
 
   try {
-    gateway = createGateway(app, options.port);
-    await gateway.waitUntilListening();
-    const boundPort = gateway.getPort();
+    transport = createTransport({
+      port: options.port,
+      host: options.host,
+      allowedOrigin: options.allowedOrigin,
+      maximumPayloadBytes: options.maximumPayloadBytes,
+      roomManager: app.roomManager,
+      isReady: () => app.demoScheduler.isRunning() && !app.demoRoom.isFaulted(),
+    });
+    await transport.waitUntilListening();
+    const boundPort = transport.getPort();
     app.demoScheduler.start();
-    log(formatListeningMessage(app, boundPort));
+    log(formatListeningMessage(app, options.host, boundPort));
   } catch (startupError) {
     app.demoScheduler.stop();
-    if (gateway !== null) {
+    if (transport !== null) {
       try {
-        await gateway.close();
+        await transport.close();
       } catch (cleanupError) {
         reportShutdownError(cleanupError);
       }
     }
     throw startupError;
   }
-  const activeGateway = gateway;
+  const activeTransport = transport;
 
   let shutdownPromise: Promise<void> | null = null;
   const handleSignal = (): void => {
@@ -108,12 +130,12 @@ export async function startServer(
 
     removeShutdownHandlers();
     app.demoScheduler.stop();
-    shutdownPromise = activeGateway.close();
+    shutdownPromise = activeTransport.close();
     return shutdownPromise;
   };
 
   addSignalListener("SIGINT", handleSignal);
   addSignalListener("SIGTERM", handleSignal);
 
-  return { app, gateway: activeGateway, shutdown };
+  return { app, gateway: activeTransport, shutdown };
 }

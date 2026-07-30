@@ -29,6 +29,7 @@ import {
 } from "@mct/shared";
 import type { RoomManager } from "./room-manager.js";
 import type { RoomUpdate, UnsubscribeRoomUpdates } from "./room-events.js";
+import { DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES } from "./server-network-config.js";
 
 export interface WsGatewayOptions {
   readonly port?: number;
@@ -124,7 +125,12 @@ export class WsGateway {
         console.error("WebSocket gateway error:", error);
       });
     this.server =
-      options.webSocketServer ?? new WebSocketServer({ port: options.port! });
+      options.webSocketServer ??
+      new WebSocketServer({
+        port: options.port!,
+        maxPayload: DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES,
+        perMessageDeflate: false,
+      });
     this.listeningPromise = this.createListeningPromise();
     void this.listeningPromise.catch(() => undefined);
     this.server.on("error", (error) => this.reportError(error));

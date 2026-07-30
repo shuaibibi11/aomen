@@ -15,6 +15,7 @@ import {
 } from "@mct/shared";
 import type { EventStore } from "./memory-event-store.js";
 import { RoomFaultedError, RoomManager } from "./room-manager.js";
+import { DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES } from "./server-network-config.js";
 import { getIntentActorError, WsGateway } from "./ws-gateway.js";
 
 const openGateways: WsGateway[] = [];
@@ -150,6 +151,54 @@ async function joinClient(
   socket.send(JSON.stringify({ type: "join_room", tableId, actorId, credential }));
   return response;
 }
+
+async function waitForSocketCloseCode(socket: WebSocket): Promise<number> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const socketClosePromise = new Promise<number>((resolve) => {
+    socket.once("close", (closeCode: number) => resolve(closeCode));
+  });
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error("Timed out waiting for WebSocket payload rejection"));
+    }, 1_000);
+  });
+
+  try {
+    return await Promise.race([socketClosePromise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+describe("WsGateway transport defaults", () => {
+  it("limits self-hosted messages to 64 KiB and disables compression", async () => {
+    const store = new ControllableEventStore();
+    const roomManager = new RoomManager(store);
+    const gateway = new WsGateway({
+      port: 0,
+      roomManager,
+      onError: () => undefined,
+    });
+    openGateways.push(gateway);
+    await gateway.waitUntilListening();
+
+    const socket = new WebSocket(`ws://127.0.0.1:${gateway.getPort()}`, {
+      perMessageDeflate: true,
+    });
+    socket.once("error", () => undefined);
+    await once(socket, "open");
+
+    try {
+      expect(socket.extensions).toBe("");
+      socket.send(Buffer.alloc(DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES + 1, "a"));
+      expect(await waitForSocketCloseCode(socket)).toBe(1009);
+    } finally {
+      if (socket.readyState !== WebSocket.CLOSED) {
+        socket.terminate();
+      }
+    }
+  });
+});
 
 describe("WebSocket actor binding", () => {
   const joinedActorId = asActorId("joined-human");

@@ -58,7 +58,7 @@ PostgreSQL 配置，空值、其他协议和拼写变体会立即失败。
 `DATABASE_URL` 只属于 server 进程，绝不可提交到 Git、放入前端、WebSocket 消息、
 URL 或日志。此切片仅提供邀请认证 repository、SQL migration runner 和 PostgreSQL
 基础 schema；**启动只校验 PostgreSQL 配置，本切片不会将对局持久化**：live room
-仍使用内存 event log，且没有接入认证 cookie 或 WSS。这些运行时集成由后续切片完成。
+仍使用内存 event log，且尚未接入认证 cookie。这些运行时集成由后续切片完成。
 
 远端 PostgreSQL 使用精确值 `DATABASE_TLS_MODE=verify-full`，且这是默认值；Pool 会
 设置 `ssl: { rejectUnauthorized: true }` 来校验服务器证书。为避免连接串覆盖此策略，
@@ -94,6 +94,8 @@ Server 要求显式提供演示房间 credential。只使用临时开发值，�
 Set-Location "E:\path\to\macau-casino-training"
 $env:DEMO_ROOM_CREDENTIAL = "replace-with-a-temporary-development-value"
 $env:PORT = "8787"
+$env:BIND_HOST = "127.0.0.1"
+$env:WEBSOCKET_MAX_PAYLOAD_BYTES = "65536"
 pnpm --filter @mct/server start
 ```
 
@@ -104,7 +106,35 @@ pnpm --filter @mct/server start
 - seats：7
 - AI actors：默认 2 个 Basic AI（可仅在服务端启用 LLM）
 - rule pack：`dev/generic-macau-baccarat.v1.json`
-- WebSocket：`ws://127.0.0.1:8787`（按实际 host/port 调整）
+- loopback health：`http://127.0.0.1:8787/livez` 和 `http://127.0.0.1:8787/healthz`
+- loopback WebSocket：`ws://127.0.0.1:8787/ws`
+
+### Secure HTTP and WebSocket hosting
+
+The server owns one cleartext Node HTTP listener for `/livez`, `/healthz`, and
+the exact WebSocket upgrade endpoint `/ws`. It is intentionally a loopback
+listener, not an Internet-facing TLS endpoint. `BIND_HOST` defaults to the
+exact value `127.0.0.1` and only accepts `127.0.0.1`, `::1`, or `localhost`.
+Do not use a direct public IP or expose `ws://` / `http://` traffic without TLS.
+
+Put a trusted Nginx TLS terminator in front of the process. It must proxy both
+`/ws` with WebSocket upgrade headers and the `/livez` and `/healthz` endpoints.
+The browser-facing endpoint should use an external HTTPS/WSS origin such as
+`https://<staging-ip>:8443` and `wss://<staging-ip>:8443/ws`; the values are
+placeholders, not deployment addresses.
+
+| Variable | Requirement / default |
+| --- | --- |
+| `PORT` | Integer from `1` through `65535`; default `8787` |
+| `BIND_HOST` | Exact loopback host; default `127.0.0.1` |
+| `ALLOWED_ORIGIN` | Optional exact canonical `http` or `https` origin. When set, every `/ws` upgrade must carry the identical `Origin` header. |
+| `WEBSOCKET_MAX_PAYLOAD_BYTES` | Positive integer up to `1048576`; default `65536` |
+| `WEBSOCKET_PER_MESSAGE_DEFLATE` | Unsupported as environment input and always disabled |
+
+Set `ALLOWED_ORIGIN=https://<staging-ip>:8443` in a proxy deployment. Leaving
+it unset is only for controlled local development and test use. There is no
+wildcard CORS response. This slice only establishes the secure host boundary;
+it does not add cookie authentication or an administrative REST API.
 
 ### Server-only LLM decision configuration
 
@@ -167,7 +197,8 @@ pnpm --filter @mct/table-3d dev
 
 - 事件存储仅为进程内 `MemoryEventStore`，重启即丢失；尚无 Postgres 或持久回放服务。
 - PostgreSQL schema、migration runner 与邀请认证 repository 已具备，但尚未接到 live
-  room event log、认证 cookie 或 WSS；当前 demo 仍是内存房间服务。
+  room event log 或认证 cookie；当前 demo 仍是内存房间服务。HTTP/WS 仅提供由 Nginx
+  TLS 终止保护的 loopback host boundary，不是完整的部署配置。
 - 演示房间仅支持一个 human actor，不是生产多人账号/席位系统。
 - Basic AI 已工作；LLM 仅有 provider-neutral 接口、校验、超时和回退，未接具体 provider SDK。
 - 尚无生产级认证、授权、用户目录、secret 管理或教练后台服务。
