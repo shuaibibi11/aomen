@@ -60,6 +60,23 @@ describe("resolveAiRuntimeConfig", () => {
     expect(resolveAiRuntimeConfig({ AI_MODE: "basic" })).toEqual({ mode: "basic" });
   });
 
+  it.each(["", "   ", "\t", "basic ", " llm", "LLM", "openai", "basic-ai", "llm "])(
+    "rejects the defined but invalid AI_MODE %j without exposing secrets",
+    (mode) => {
+      const error = (() => {
+        try {
+          resolveAiRuntimeConfig({ AI_MODE: mode, LLM_API_KEY: TEST_API_KEY });
+        } catch (caughtError) {
+          return caughtError;
+        }
+        throw new Error("Expected runtime configuration to reject");
+      })();
+
+      expect(error).toMatchObject({ message: "AI_MODE must be either basic or llm" });
+      expect(String(error)).not.toContain(TEST_API_KEY);
+    },
+  );
+
   it("applies the OpenAI-compatible LLM defaults", () => {
     expect(resolveAiRuntimeConfig(createLlmEnvironment())).toEqual({
       mode: "llm",
@@ -69,15 +86,6 @@ describe("resolveAiRuntimeConfig", () => {
       timeoutMs: DEFAULT_LLM_TIMEOUT_MS,
     });
   });
-
-  it.each(["LLM", "openai", "basic-ai", "llm "]) (
-    "rejects unsupported AI_MODE %j",
-    (mode) => {
-      expect(() => resolveAiRuntimeConfig({ AI_MODE: mode })).toThrow(
-        "AI_MODE must be either basic or llm",
-      );
-    },
-  );
 
   it("rejects a missing LLM key without including environment values", () => {
     const error = (() => {

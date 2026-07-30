@@ -85,7 +85,7 @@ export function resolveAiRuntimeConfig(
   environment: AiRuntimeEnvironment,
 ): AiRuntimeConfig {
   const mode = environment.AI_MODE;
-  if (mode === undefined || mode.trim().length === 0 || mode === "basic") {
+  if (mode === undefined || mode === "basic") {
     return { mode: "basic" };
   }
 

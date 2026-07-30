@@ -34,6 +34,53 @@ function createRequest(signal: AbortSignal) {
 }
 
 describe("OpenAiCompatibleLlmProvider", () => {
+  it("uses and restores a stubbed global fetch when no transport is injected", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchCalls: Array<{ url: RequestInfo | URL; init: RequestInit | undefined }> = [];
+    const stubbedGlobalFetch: typeof globalThis.fetch = async (url, init) => {
+      fetchCalls.push({ url, init });
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '{"action":"sit_out"}' } }] }),
+        { status: 200 },
+      );
+    };
+    const signal = new AbortController().signal;
+
+    globalThis.fetch = stubbedGlobalFetch;
+    try {
+      const provider = new OpenAiCompatibleLlmProvider({
+        completionsUrl: COMPLETIONS_URL,
+        apiKey: TEST_API_KEY,
+      });
+
+      await expect(provider.complete(createRequest(signal))).resolves.toEqual({
+        content: '{"action":"sit_out"}',
+      });
+      expect(fetchCalls).toEqual([{
+        url: COMPLETIONS_URL,
+        init: expect.objectContaining({
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${TEST_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "deepseek-chat",
+            messages: [
+              { role: "system", content: "Follow the rules." },
+              { role: "user", content: "Choose an action." },
+            ],
+          }),
+          signal,
+        }),
+      }]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(globalThis.fetch).toBe(originalFetch);
+  });
+
   it("posts the OpenAI chat request with authorization and the supplied signal", async () => {
     const calls: Array<{ url: string; init: Parameters<OpenAiCompatibleFetch>[1] }> = [];
     const fetch: OpenAiCompatibleFetch = async (url, init) => {
