@@ -42,9 +42,9 @@ pnpm install --frozen-lockfile
 
 ### 本地 `.env` 配置
 
-Server 入口通过 `dotenv` 加载 `.env`，但这只适用于受控的本地开发。将 `.env.example` 复制为不受 Git 跟踪的 `.env`；仓库 `.gitignore` 已保护 `.env`。已有的 `process.env` 值优先，因此 shell 变量和部署注入的配置不会被本地文件覆盖。
+Server 入口会显式定位并加载**仓库根目录**的 `.env`，但这只适用于受控的本地开发。将仓库根目录的 `.env.example` 复制为同一目录下、不受 Git 跟踪的 `.env`；仓库 `.gitignore` 已保护 `.env`。即使 `pnpm --filter @mct/server start` 实际从 `apps/server` 运行，该命令也会加载仓库根目录的 `.env`。已有的 `process.env` 值优先，因此 shell 变量和部署注入的配置不会被本地文件覆盖。
 
-不要将 `.env` 用作生产 secret 的交付机制。生产环境应通过 secret manager 或 systemd `EnvironmentFile` 提供这些值。API token、credential 和 LLM 配置只能存在于 server：绝不可放入 frontend source、client bundle、browser storage、URL 或 log。
+不要将 `.env` 用作生产 secret 的交付机制。生产环境应通过 secret manager 或 systemd `EnvironmentFile` 提供这些值；由 systemd `EnvironmentFile` 注入的进程环境变量优先于根目录 `.env`。API token、credential 和 LLM 配置只能存在于 server：绝不可放入 frontend source、client bundle、browser storage、URL 或 log。
 
 ## 验证命令
 

@@ -114,24 +114,44 @@ async function cancelResponseReader(
   }
 }
 
+async function cancelResponseBody(
+  responseBody: ReadableStream<Uint8Array> | null,
+): Promise<void> {
+  if (responseBody === null) {
+    return;
+  }
+
+  try {
+    await responseBody.cancel();
+  } catch {
+    // Preserve the original validation failure over cleanup failures.
+  }
+}
+
 async function readResponseBytes(
   response: OpenAiCompatibleFetchResponse,
   maxResponseBodyBytes: number,
 ): Promise<Uint8Array> {
-  const advertisedContentLength = readContentLength(response.headers);
-  if (
-    advertisedContentLength !== undefined &&
-    advertisedContentLength > maxResponseBodyBytes
-  ) {
-    throw new OpenAiCompatibleLlmProviderError(
-      "LLM provider response exceeds the configured size limit",
-    );
-  }
+  let advertisedContentLength: number | undefined;
+  try {
+    advertisedContentLength = readContentLength(response.headers);
+    if (
+      advertisedContentLength !== undefined &&
+      advertisedContentLength > maxResponseBodyBytes
+    ) {
+      throw new OpenAiCompatibleLlmProviderError(
+        "LLM provider response exceeds the configured size limit",
+      );
+    }
 
-  if (response.body === null) {
-    throw new OpenAiCompatibleLlmProviderError(
-      "LLM provider returned an empty response body",
-    );
+    if (response.body === null) {
+      throw new OpenAiCompatibleLlmProviderError(
+        "LLM provider returned an empty response body",
+      );
+    }
+  } catch (error) {
+    await cancelResponseBody(response.body);
+    throw error;
   }
 
   const responseChunks: Uint8Array[] = [];
@@ -294,6 +314,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     }
 
     if (!response.ok) {
+      await cancelResponseBody(response.body);
       throw new OpenAiCompatibleLlmProviderError(
         `LLM provider request failed with status ${response.status}`,
       );

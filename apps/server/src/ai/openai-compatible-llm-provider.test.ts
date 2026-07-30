@@ -33,8 +33,13 @@ function createRequest(signal: AbortSignal) {
 
 function createBodyThatTracksReaderAccess(
   markBodyAsRead: () => void,
+  markBodyAsCancelled: () => void = () => undefined,
 ): ReadableStream<Uint8Array> {
-  const responseBody = new ReadableStream<Uint8Array>();
+  const responseBody = new ReadableStream<Uint8Array>({
+    cancel() {
+      markBodyAsCancelled();
+    },
+  });
   const getOriginalReader = responseBody.getReader.bind(responseBody);
   Object.defineProperty(responseBody, "getReader", {
     value: () => {
@@ -226,12 +231,15 @@ describe("OpenAiCompatibleLlmProvider", () => {
 
   it("reports non-success statuses without reading the response body or exposing the key", async () => {
     let bodyWasRead = false;
+    let bodyWasCancelled = false;
     const response: OpenAiCompatibleFetchResponse = {
       ok: false,
       status: 429,
       headers: { get: () => null },
       body: createBodyThatTracksReaderAccess(() => {
         bodyWasRead = true;
+      }, () => {
+        bodyWasCancelled = true;
       }),
     };
     const fetch: OpenAiCompatibleFetch = async () => response;
@@ -248,16 +256,20 @@ describe("OpenAiCompatibleLlmProvider", () => {
     expect(error).toMatchObject({ message: "LLM provider request failed with status 429" });
     expect(String(error)).not.toContain(TEST_API_KEY);
     expect(bodyWasRead).toBe(false);
+    expect(bodyWasCancelled).toBe(true);
   });
 
   it("rejects an advertised oversized response before reading its body", async () => {
     let bodyWasRead = false;
+    let bodyWasCancelled = false;
     const response: OpenAiCompatibleFetchResponse = {
       ok: true,
       status: 200,
       headers: { get: () => "11" },
       body: createBodyThatTracksReaderAccess(() => {
         bodyWasRead = true;
+      }, () => {
+        bodyWasCancelled = true;
       }),
     };
     const fetch: OpenAiCompatibleFetch = async () => response;
@@ -277,6 +289,7 @@ describe("OpenAiCompatibleLlmProvider", () => {
     });
     expect(String(error)).not.toContain(TEST_API_KEY);
     expect(bodyWasRead).toBe(false);
+    expect(bodyWasCancelled).toBe(true);
   });
 
   it("cancels an oversized stream without a Content-Length header", async () => {
@@ -340,12 +353,15 @@ describe("OpenAiCompatibleLlmProvider", () => {
 
   it("rejects malformed Content-Length values without reading the body", async () => {
     let bodyWasRead = false;
+    let bodyWasCancelled = false;
     const response: OpenAiCompatibleFetchResponse = {
       ok: true,
       status: 200,
       headers: { get: () => "1e6" },
       body: createBodyThatTracksReaderAccess(() => {
         bodyWasRead = true;
+      }, () => {
+        bodyWasCancelled = true;
       }),
     };
     const fetch: OpenAiCompatibleFetch = async () => response;
@@ -364,6 +380,36 @@ describe("OpenAiCompatibleLlmProvider", () => {
     });
     expect(String(error)).not.toContain(TEST_API_KEY);
     expect(bodyWasRead).toBe(false);
+    expect(bodyWasCancelled).toBe(true);
+  });
+
+  it("preserves the non-success error when response-body cancellation fails", async () => {
+    let cancellationWasAttempted = false;
+    const response: OpenAiCompatibleFetchResponse = {
+      ok: false,
+      status: 429,
+      headers: { get: () => null },
+      body: new ReadableStream<Uint8Array>({
+        cancel() {
+          cancellationWasAttempted = true;
+          throw new Error("cancellation failure must not surface");
+        },
+      }),
+    };
+    const fetch: OpenAiCompatibleFetch = async () => response;
+    const provider = new OpenAiCompatibleLlmProvider({
+      completionsUrl: COMPLETIONS_URL,
+      apiKey: TEST_API_KEY,
+      fetch,
+    });
+
+    const error = await provider.complete(createRequest(new AbortController().signal)).catch(
+      (caughtError: unknown) => caughtError,
+    );
+
+    expect(error).toMatchObject({ message: "LLM provider request failed with status 429" });
+    expect(String(error)).not.toContain("cancellation failure must not surface");
+    expect(cancellationWasAttempted).toBe(true);
   });
 
   it("converts response stream read failures into a safe provider error", async () => {

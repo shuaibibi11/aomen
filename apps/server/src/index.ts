@@ -1,5 +1,3 @@
-import "dotenv/config";
-
 /**
  * Server entry point.
  *
@@ -7,7 +5,10 @@ import "dotenv/config";
  * demo room's system dealer drives timed betting, dealing, and settlement
  * phases so a connected client sees a realistic round lifecycle.
  */
+import { loadRepositoryEnvironment } from "./server-environment.js";
 import { startServer } from "./server-startup.js";
+
+loadRepositoryEnvironment(import.meta.url);
 
 const PORT = Number(process.env.PORT ?? 8787);
 
