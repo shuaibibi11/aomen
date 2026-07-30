@@ -24,10 +24,12 @@
     "@mct/shared": "workspace:*",
     "@mct/table-engine": "workspace:*",
     "dotenv": "^17.4.2",
+    "pg": "^8.22.0",
     "ws": "8.18.0"
   },
   "devDependencies": {
     "@types/node": "22.10.5",
+    "@types/pg": "^8.20.0",
     "@types/ws": "8.5.13",
     "typescript": "5.7.3",
     "vitest": "3.0.5"

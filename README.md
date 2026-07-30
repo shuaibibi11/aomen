@@ -13,6 +13,7 @@
 - 带认证 join、消息校验、幂等恢复、心跳和重连的 WebSocket 远端会话；
 - 默认本地运行的交互式 Three.js 牌桌、点击下注、发牌和筹码/牌面渲染；
 - 已工作的 Basic AI，以及可注入、provider-neutral 的 LLM 决策边界和安全回退。
+- 邀请制认证领域、PostgreSQL repository 与 migration 基础层（尚未接入 live room event log）。
 
 LLM 边界目前**没有接入任何具体供应商 SDK**。远端会话默认关闭，浏览器演示默认使用进程内 local session。详细基线和提交范围见 [当前进度](docs/development/current-progress.md)。
 
@@ -45,6 +46,18 @@ pnpm install --frozen-lockfile
 Server 入口会显式定位并加载**仓库根目录**的 `.env`，但这只适用于受控的本地开发。将仓库根目录的 `.env.example` 复制为同一目录下、不受 Git 跟踪的 `.env`；仓库 `.gitignore` 已保护 `.env`。即使 `pnpm --filter @mct/server start` 实际从 `apps/server` 运行，该命令也会加载仓库根目录的 `.env`。已有的 `process.env` 值优先，因此 shell 变量和部署注入的配置不会被本地文件覆盖。
 
 不要将 `.env` 用作生产 secret 的交付机制。生产环境应通过 secret manager 或 systemd `EnvironmentFile` 提供这些值；由 systemd `EnvironmentFile` 注入的进程环境变量优先于根目录 `.env`。API token、credential 和 LLM 配置只能存在于 server：绝不可放入 frontend source、client bundle、browser storage、URL 或 log。
+
+### Server persistence foundation
+
+`PERSISTENCE_MODE` 默认是精确值 `memory`，因此当前 demo 的 `Room` / `CreateRoom`
+继续使用同步 `MemoryEventStore`，运行行为不变。设置精确值 `postgres` 时，必须由
+server 的 secret manager 或 `EnvironmentFile` 提供合法 `postgres://` 或
+`postgresql://` `DATABASE_URL`；空值、其他协议和拼写变体会在配置解析时失败。
+
+`DATABASE_URL` 只属于 server 进程，绝不可提交到 Git、放入前端、WebSocket 消息、
+URL 或日志。此切片仅提供邀请认证 repository、SQL migration runner 和 PostgreSQL
+基础 schema；**尚未把 live room 的 event log 迁移到 PostgreSQL，也没有接入认证
+cookie 或 WSS**。这些运行时集成由后续切片完成。
 
 ## 验证命令
 
@@ -144,6 +157,8 @@ pnpm --filter @mct/table-3d dev
 ## 已知限制
 
 - 事件存储仅为进程内 `MemoryEventStore`，重启即丢失；尚无 Postgres 或持久回放服务。
+- PostgreSQL schema、migration runner 与邀请认证 repository 已具备，但尚未接到 live
+  room event log、认证 cookie 或 WSS；当前 demo 仍是内存房间服务。
 - 演示房间仅支持一个 human actor，不是生产多人账号/席位系统。
 - Basic AI 已工作；LLM 仅有 provider-neutral 接口、校验、超时和回退，未接具体 provider SDK。
 - 尚无生产级认证、授权、用户目录、secret 管理或教练后台服务。
