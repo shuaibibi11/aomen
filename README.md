@@ -171,13 +171,17 @@ pnpm --filter @mct/table-3d dev
 <script>
   globalThis.__MCT_ROOM_CONFIG__ = Object.freeze({
     runtime: "remote",
-    wsUrl: "ws://127.0.0.1:8787",
+    wsUrl: "ws://127.0.0.1:8787/ws",
     tableId: "demo-table",
     actorId: "demo-human",
     credential: "inject-at-runtime-not-a-real-secret"
   });
 </script>
 ```
+
+在 Nginx TLS 部署中，remote session 必须使用与浏览器同源的 WSS endpoint：
+`wss://<staging-ip>:8443/ws`。不要省略 `/ws`，也不要让浏览器绕过 Nginx 直连
+loopback server。
 
 该对象必须在应用模块加载前写入。不要通过 URL/query string 传 credential；不要将 credential 打入日志，也不要写入 localStorage、sessionStorage、IndexedDB 或其他持久化存储。实现会忽略 URL 中的远端 endpoint、身份与 credential，避免不受信链接改变信任单元。
 
