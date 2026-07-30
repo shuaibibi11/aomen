@@ -136,4 +136,6 @@ pnpm --filter @mct/table-3d dev
 - [Phase 0-1 实现计划](docs/superpowers/plans/2026-07-27-macau-casino-training-phase0-1.md)
 - [当前进度与提交基线](docs/development/current-progress.md)
 - [2026-07-30 本地验收记录（非 CI）](docs/development/validation-2026-07-29.md)
+- [对局架构说明](docs/architecture/game-architecture.md)
+- [百家乐新手训练指南](docs/guides/baccarat-beginner-guide.md)
 - [Git 与外部 worktree 工作流](docs/development/git-workflow.md)
