@@ -40,6 +40,7 @@ describe("startServer", () => {
 
     const runningServer = await startServer({
       port: 0,
+      environment: {},
       createApplication: async () => app,
       createGateway: () => gateway,
       log,
@@ -78,6 +79,7 @@ describe("startServer", () => {
     await expect(
       startServer({
         port: 0,
+        environment: {},
         createApplication: async () => app,
         createGateway: () => gateway,
         addSignalListener,
@@ -89,5 +91,28 @@ describe("startServer", () => {
     expect(app.demoScheduler.stop).toHaveBeenCalledOnce();
     expect(gateway.close).toHaveBeenCalledOnce();
     expect(addSignalListener).not.toHaveBeenCalled();
+  });
+
+  it("rejects an incomplete postgres configuration before creating a room or gateway", async () => {
+    const createApplication = vi.fn(async () => createTestApp([]));
+    const createGateway = vi.fn(() => ({
+      waitUntilListening: async () => undefined,
+      getPort: () => 0,
+      close: async () => undefined,
+    }));
+
+    await expect(
+      startServer({
+        port: 0,
+        environment: { PERSISTENCE_MODE: "postgres" },
+        createApplication,
+        createGateway,
+        addSignalListener: vi.fn(),
+        removeSignalListener: vi.fn(),
+      }),
+    ).rejects.toThrow("DATABASE_URL must be a valid PostgreSQL connection URL");
+
+    expect(createApplication).not.toHaveBeenCalled();
+    expect(createGateway).not.toHaveBeenCalled();
   });
 });

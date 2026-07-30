@@ -1,4 +1,6 @@
 import { createApp, type App } from "./app.js";
+import type { PersistenceRuntimeEnvironment } from "./persistence/persistence-runtime-config.js";
+import { resolveServerStartupConfiguration } from "./server-startup-configuration.js";
 import { WsGateway } from "./ws-gateway.js";
 
 type ShutdownSignal = "SIGINT" | "SIGTERM";
@@ -11,6 +13,8 @@ export interface GatewayLifecycle {
 
 export interface StartServerOptions {
   readonly port: number;
+  /** Allows tests and embedding hosts to supply startup settings explicitly. */
+  readonly environment?: PersistenceRuntimeEnvironment;
   readonly createApplication?: () => Promise<App>;
   readonly createGateway?: (app: App, port: number) => GatewayLifecycle;
   readonly log?: (message: string) => void;
@@ -46,6 +50,9 @@ function formatListeningMessage(app: App, port: number): string {
 export async function startServer(
   options: StartServerOptions,
 ): Promise<RunningServer> {
+  // Validate persistence settings before creating rooms or opening a listener.
+  resolveServerStartupConfiguration(options.environment ?? process.env);
+
   const createApplication = options.createApplication ?? createApp;
   const createGateway =
     options.createGateway ??

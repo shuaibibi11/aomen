@@ -52,12 +52,13 @@ Server 入口会显式定位并加载**仓库根目录**的 `.env`，但这只�
 `PERSISTENCE_MODE` 默认是精确值 `memory`，因此当前 demo 的 `Room` / `CreateRoom`
 继续使用同步 `MemoryEventStore`，运行行为不变。设置精确值 `postgres` 时，必须由
 server 的 secret manager 或 `EnvironmentFile` 提供合法 `postgres://` 或
-`postgresql://` `DATABASE_URL`；空值、其他协议和拼写变体会在配置解析时失败。
+`postgresql://` `DATABASE_URL`；启动时会在创建 `Room` 或启动 Gateway 前校验该
+PostgreSQL 配置，空值、其他协议和拼写变体会立即失败。
 
 `DATABASE_URL` 只属于 server 进程，绝不可提交到 Git、放入前端、WebSocket 消息、
 URL 或日志。此切片仅提供邀请认证 repository、SQL migration runner 和 PostgreSQL
-基础 schema；**尚未把 live room 的 event log 迁移到 PostgreSQL，也没有接入认证
-cookie 或 WSS**。这些运行时集成由后续切片完成。
+基础 schema；**启动只校验 PostgreSQL 配置，本切片不会将对局持久化**：live room
+仍使用内存 event log，且没有接入认证 cookie 或 WSS。这些运行时集成由后续切片完成。
 
 ## 验证命令
 
