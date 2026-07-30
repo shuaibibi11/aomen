@@ -33,7 +33,7 @@ Set-Location "E:\澳门开发-worktrees\recover-current"; pnpm --filter @mct/tab
 | `pnpm build` | 7/7 workspace 项目成功 |
 | `pnpm test` | 35 个测试文件、538 个测试通过 |
 | `pnpm typecheck` | 7/7 workspace 项目成功 |
-| `@mct/server` | 11 个测试文件、142 个测试通过（来自全仓测试） |
+| `@mct/server` | 11 个测试文件、144 个测试通过（来自全仓测试） |
 | `@mct/table-3d` | 14 个测试文件、181 个测试通过 |
 | `@mct/room-client` | 1 个测试文件、45 个测试通过（来自全仓测试） |
 | `@mct/room-protocol` | 1 个测试文件、67 个测试通过（来自全仓测试） |
