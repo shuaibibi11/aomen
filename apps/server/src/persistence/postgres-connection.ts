@@ -14,6 +14,17 @@ export interface PostgresPoolOptions {
 
 export interface PostgresConnectionOptions extends PostgresPoolOptions {
   readonly connectionString: string;
+  readonly ssl: false | Readonly<{ rejectUnauthorized: true }>;
+}
+
+export interface PostgresPoolDependencies {
+  readonly poolFactory?: (configuration: PoolConfig) => Pool;
+  readonly onIdleClientError?: (error: Error) => void;
+}
+
+export interface ManagedPostgresPool {
+  readonly pool: Pool;
+  close(): Promise<void>;
 }
 
 export const DEFAULT_POSTGRES_POOL_OPTIONS: PostgresPoolOptions = {
@@ -44,6 +55,7 @@ export function createPostgresConnectionOptions(
 ): PostgresConnectionOptions {
   return {
     connectionString: runtimeConfig.databaseUrl,
+    ssl: runtimeConfig.tlsMode === "verify-full" ? { rejectUnauthorized: true } : false,
     max: resolvePositiveInteger(overrides.max, DEFAULT_POSTGRES_POOL_OPTIONS.max, "max"),
     connectionTimeoutMillis: resolvePositiveInteger(
       overrides.connectionTimeoutMillis,
@@ -58,19 +70,45 @@ export function createPostgresConnectionOptions(
   };
 }
 
+function reportIdleClientError(
+  error: Error,
+  onIdleClientError: ((error: Error) => void) | undefined,
+): void {
+  if (onIdleClientError !== undefined) {
+    try {
+      onIdleClientError(error);
+      return;
+    } catch {
+      // Error listeners must not throw and crash the process.
+    }
+  }
+
+  console.error("PostgreSQL pool idle client error");
+}
+
 /** Creates a real pg Pool only when a caller explicitly opts into postgres mode. */
 export function createPostgresPool(
   runtimeConfig: PostgresPersistenceRuntimeConfig,
   overrides: Partial<PostgresPoolOptions> = {},
-): Pool {
+  dependencies: PostgresPoolDependencies = {},
+): ManagedPostgresPool {
   const connectionOptions = createPostgresConnectionOptions(runtimeConfig, overrides);
   const poolConfig: PoolConfig = {
     connectionString: connectionOptions.connectionString,
+    ssl: connectionOptions.ssl,
     max: connectionOptions.max,
     connectionTimeoutMillis: connectionOptions.connectionTimeoutMillis,
     idleTimeoutMillis: connectionOptions.idleTimeoutMillis,
   };
-  return new Pool(poolConfig);
+  const pool = dependencies.poolFactory?.(poolConfig) ?? new Pool(poolConfig);
+  pool.on("error", (error) => {
+    reportIdleClientError(error, dependencies.onIdleClientError);
+  });
+
+  return {
+    pool,
+    close: async () => pool.end(),
+  };
 }
 
 class PgSqlTransactionClient implements SqlTransactionClient {

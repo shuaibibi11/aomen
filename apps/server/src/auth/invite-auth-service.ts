@@ -1,7 +1,12 @@
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto";
 import { canonicalizeTrainingEmail, isValidTrainingEmail } from "./email.js";
 import type { InviteAuthRepository } from "./invite-auth-repository.js";
-import { ScryptPasswordHasher, type PasswordHasher, validateTrainingPassword } from "./password-hasher.js";
+import {
+  MAXIMUM_TRAINING_PASSWORD_LENGTH,
+  ScryptPasswordHasher,
+  type PasswordHasher,
+  validateTrainingPassword,
+} from "./password-hasher.js";
 import type {
   AuthSession,
   IssuedInvitation,
@@ -126,13 +131,19 @@ export class InviteAuthService {
   }
 
   async login(input: LoginInput): Promise<LoginResult> {
+    if (input.password.length > MAXIMUM_TRAINING_PASSWORD_LENGTH) {
+      return { ok: false, error: "invalid_credentials" };
+    }
+
     const email = canonicalizeTrainingEmail(input.email);
     if (!isValidTrainingEmail(email)) {
+      await this.passwordHasher.verifyUnknownPassword(input.password);
       return { ok: false, error: "invalid_credentials" };
     }
 
     const storedUser = await this.options.repository.findUserByEmail(email);
     if (storedUser === undefined) {
+      await this.passwordHasher.verifyUnknownPassword(input.password);
       return { ok: false, error: "invalid_credentials" };
     }
 

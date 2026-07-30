@@ -6,12 +6,20 @@ import type { PasswordHasher } from "./password-hasher.js";
 const TEST_PASSWORD = "correct horse battery staple";
 
 class DeterministicPasswordHasher implements PasswordHasher {
+  readonly passwordCostCalls: string[] = [];
+
   async hash(password: string): Promise<string> {
     return `test-hash:${password}`;
   }
 
   async verify(password: string, encodedPasswordHash: string): Promise<boolean> {
+    this.passwordCostCalls.push("verify");
     return encodedPasswordHash === `test-hash:${password}`;
+  }
+
+  async verifyUnknownPassword(_password: string): Promise<boolean> {
+    this.passwordCostCalls.push("verifyUnknownPassword");
+    return false;
   }
 }
 
@@ -26,12 +34,13 @@ function createDeterministicRandomBytes(): (size: number) => Buffer {
 function createService(
   repository: MemoryInviteAuthRepository,
   currentTime: { value: Date },
+  passwordHasher: PasswordHasher = new DeterministicPasswordHasher(),
 ): InviteAuthService {
   return new InviteAuthService({
     repository,
     clock: () => currentTime.value,
     randomBytes: createDeterministicRandomBytes(),
-    passwordHasher: new DeterministicPasswordHasher(),
+    passwordHasher,
   });
 }
 
@@ -252,5 +261,51 @@ describe("InviteAuthService", () => {
     }
     currentTime.value = new Date("2026-07-30T08:00:01.000Z");
     await expect(service.getAuthenticatedUser(freshLogin.value.token)).resolves.toBeUndefined();
+  });
+
+  it("does equivalent password work for unknown identities but not overlong login passwords", async () => {
+    const repository = new MemoryInviteAuthRepository();
+    const currentTime = { value: new Date("2026-07-30T00:00:00.000Z") };
+    const passwordHasher = new DeterministicPasswordHasher();
+    const service = createService(repository, currentTime, passwordHasher);
+    const invitation = await service.issueInvitation();
+    const activation = await service.activateInvitation({
+      code: invitation.code,
+      email: "trainee@example.test",
+      password: TEST_PASSWORD,
+    });
+    if (!activation.ok) {
+      throw new Error("Expected invitation activation to succeed");
+    }
+    expect(passwordHasher.passwordCostCalls).toEqual([]);
+
+    await expect(
+      service.login({ email: "missing@example.test", password: TEST_PASSWORD }),
+    ).resolves.toEqual({ ok: false, error: "invalid_credentials" });
+    expect(passwordHasher.passwordCostCalls).toEqual(["verifyUnknownPassword"]);
+
+    passwordHasher.passwordCostCalls.length = 0;
+    await expect(
+      service.login({ email: "not-an-email", password: TEST_PASSWORD }),
+    ).resolves.toEqual({ ok: false, error: "invalid_credentials" });
+    expect(passwordHasher.passwordCostCalls).toEqual(["verifyUnknownPassword"]);
+
+    passwordHasher.passwordCostCalls.length = 0;
+    await expect(
+      service.login({ email: "trainee@example.test", password: "wrong password" }),
+    ).resolves.toEqual({ ok: false, error: "invalid_credentials" });
+    expect(passwordHasher.passwordCostCalls).toEqual(["verify"]);
+
+    passwordHasher.passwordCostCalls.length = 0;
+    await expect(
+      service.login({ email: "trainee@example.test", password: "a".repeat(129) }),
+    ).resolves.toEqual({ ok: false, error: "invalid_credentials" });
+    expect(passwordHasher.passwordCostCalls).toEqual([]);
+
+    passwordHasher.passwordCostCalls.length = 0;
+    await expect(
+      service.login({ email: "trainee@example.test", password: TEST_PASSWORD }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(passwordHasher.passwordCostCalls).toEqual(["verify"]);
   });
 });

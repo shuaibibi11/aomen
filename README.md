@@ -60,6 +60,14 @@ URL 或日志。此切片仅提供邀请认证 repository、SQL migration runner
 基础 schema；**启动只校验 PostgreSQL 配置，本切片不会将对局持久化**：live room
 仍使用内存 event log，且没有接入认证 cookie 或 WSS。这些运行时集成由后续切片完成。
 
+远端 PostgreSQL 使用精确值 `DATABASE_TLS_MODE=verify-full`，且这是默认值；Pool 会
+设置 `ssl: { rejectUnauthorized: true }` 来校验服务器证书。为避免连接串覆盖此策略，
+`DATABASE_URL` 不接受 `ssl`、`sslmode` 或其他 `ssl*` 查询参数。只有显式 loopback
+endpoint（`127.0.0.1`、`::1`、`localhost`）或 Unix socket 本地开发数据库可以设为
+`DATABASE_TLS_MODE=disable`；远端数据库设为 `disable` 或其他非精确 TLS mode 会在启动
+前以不含 URL 或 credential 的错误拒绝。未来如需私有 CA，应通过受审查的独立配置支持，
+而不是添加连接串 SSL 参数。
+
 ## 验证命令
 
 ```powershell

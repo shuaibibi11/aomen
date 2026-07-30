@@ -20,6 +20,6 @@ describe("resolveServerStartupConfiguration", () => {
         PERSISTENCE_MODE: "postgres",
         DATABASE_URL: TEST_DATABASE_URL,
       }),
-    ).toEqual({ mode: "postgres", databaseUrl: TEST_DATABASE_URL });
+    ).toEqual({ mode: "postgres", databaseUrl: TEST_DATABASE_URL, tlsMode: "verify-full" });
   });
 });
