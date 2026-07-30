@@ -328,11 +328,12 @@ describe("AutomaticRoundScheduler", () => {
   it("rejects human bets and ignores a pending AI result after the deadline", async () => {
     const { humanActorId, room, store, tableId } = createRealRoom();
     let resolveAiBet!: (bet: unknown) => void;
+    let pendingAiSignal: AbortSignal | undefined;
     const firstAiSeat = (
       room as unknown as {
         aiSeats: Array<{
           decisionSource: {
-            decideBet: () => unknown;
+            decideBet: (_context: unknown, signal: AbortSignal) => unknown;
           };
         }>;
       }
@@ -342,8 +343,9 @@ describe("AutomaticRoundScheduler", () => {
     }
     const originalDecision = { betKind: "player" as const, amount: 100 };
     firstAiSeat.decisionSource.decideBet = vi.fn(
-      () =>
+      (_context, signal) =>
         new Promise((resolve) => {
+          pendingAiSignal = signal;
           resolveAiBet = resolve;
         }),
     );
@@ -353,6 +355,7 @@ describe("AutomaticRoundScheduler", () => {
     await advance(TIMING.bettingWindowMs);
 
     expect(room.getSnapshot().phase).toBe("no_more_bets");
+    expect(pendingAiSignal?.aborted).toBe(true);
     const lateHumanBet = room.submitIntent({
       type: "place_bet",
       actorId: humanActorId,
@@ -375,7 +378,7 @@ describe("AutomaticRoundScheduler", () => {
     ).toHaveLength(1);
   });
 
-  it("lets a fast AI bet while another AI is pending and reuses decisions on restart", async () => {
+  it("lets a fast AI bet while another AI pending decision retries on restart", async () => {
     const tableId = asTableId("concurrent-ai-scheduler-table");
     const store = new MemoryEventStore();
     let resolveFirstDecision!: (
@@ -418,7 +421,7 @@ describe("AutomaticRoundScheduler", () => {
     scheduler.start();
     await advance(0);
 
-    expect(firstDecideBet).toHaveBeenCalledOnce();
+    expect(firstDecideBet).toHaveBeenCalledTimes(2);
     expect(secondDecideBet).toHaveBeenCalledOnce();
 
     await advance(TIMING.bettingWindowMs);
@@ -545,7 +548,7 @@ describe("AutomaticRoundScheduler", () => {
     expect(getAiBetEvents()).toHaveLength(4);
   });
 
-  it("reuses an in-flight AI decision after stop and restart", async () => {
+  it("retries an in-flight AI decision after stop and restart", async () => {
     const { humanActorId, room, store, tableId } = createRealRoom();
     const firstAiSeat = (
       room as unknown as {
@@ -573,7 +576,7 @@ describe("AutomaticRoundScheduler", () => {
     scheduler.stop();
     scheduler.start();
     await advance(0);
-    expect(decideBet).toHaveBeenCalledOnce();
+    expect(decideBet).toHaveBeenCalledTimes(2);
 
     resolveDecision(originalDecision);
     await advance(0);
@@ -987,6 +990,58 @@ describe("AutomaticRoundScheduler", () => {
 
     expect(room.closeAutomaticBetting).not.toHaveBeenCalled();
     expect(room.dealNextAutomaticCard).not.toHaveBeenCalled();
+  });
+
+  it("aborts a real room decision on stop and retries it on a same-round restart", async () => {
+    const tableId = asTableId("scheduler-aborted-decision-retry-table");
+    const store = new MemoryEventStore();
+    let firstDecisionSignal: AbortSignal | undefined;
+    let decisionAttempt = 0;
+    const decideBet = vi.fn(
+      (_context: unknown, signal: AbortSignal): Promise<{ betKind: "player"; amount: number }> => {
+        decisionAttempt += 1;
+        if (decisionAttempt === 1) {
+          firstDecisionSignal = signal;
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => reject(new Error("scheduler decision aborted")),
+              { once: true },
+            );
+          });
+        }
+        return Promise.resolve({ betKind: "player", amount: 100 });
+      },
+    );
+    const room = new RoomManager(store).createRoom({
+      tableId,
+      rulePack: createRulePack(),
+      humanActorId: asActorId("scheduler-aborted-decision-retry-human"),
+      joinCredential: "scheduler-aborted-decision-retry-credential",
+      seatCount: 2,
+      aiCount: 1,
+      shoeSeed: "scheduler-aborted-decision-retry-seed",
+      aiDecisionSourceFactory: () => ({ decideBet }),
+    });
+    const onError = vi.fn();
+    const scheduler = new AutomaticRoundScheduler(room, TIMING, { onError });
+
+    scheduler.start();
+    await advance(0);
+    expect(decideBet).toHaveBeenCalledOnce();
+
+    scheduler.stop();
+
+    expect(firstDecisionSignal?.aborted).toBe(true);
+
+    scheduler.start();
+    await advance(0);
+
+    expect(decideBet).toHaveBeenCalledTimes(2);
+    expect(
+      store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
+    ).toHaveLength(1);
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("ignores an old AI rejection after stop and restart", async () => {

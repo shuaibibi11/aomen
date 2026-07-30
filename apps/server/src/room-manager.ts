@@ -44,6 +44,8 @@ import type {
 interface AiDecisionCacheEntry {
   readonly controller: AbortController;
   readonly decisionPromise: Promise<PlayerBetDecision | null>;
+  abort(): void;
+  releaseExternalAbortListener(): void;
 }
 
 export interface AiDecisionSourceFactoryOptions {
@@ -330,10 +332,76 @@ export class Room {
   }
 
   private abortAndClearAiDecisions(): void {
-    for (const entry of this.aiDecisionCache.values()) {
-      entry.controller.abort();
+    for (const entry of [...this.aiDecisionCache.values()]) {
+      entry.abort();
     }
     this.aiDecisionCache.clear();
+  }
+
+  /**
+   * Starts one seat's decision and connects its private provider controller to
+   * the scheduler-owned cancellation signal for the active betting attempt.
+   */
+  private getOrCreateAiDecisionEntry(
+    seated: SeatedAi,
+    decisionSnapshot: TableSnapshot,
+    externalSignal: AbortSignal,
+  ): AiDecisionCacheEntry | undefined {
+    const cachedEntry = this.aiDecisionCache.get(seated.seatId);
+    if (cachedEntry !== undefined) {
+      return cachedEntry;
+    }
+    if (externalSignal.aborted) {
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const context = this.createPlayerDecisionContext(
+      decisionSnapshot,
+      seated.seatId,
+    );
+    let hasExternalAbortListener = true;
+    let decisionEntry!: AiDecisionCacheEntry;
+    let abortDecision!: () => void;
+    const releaseExternalAbortListener = (): void => {
+      if (!hasExternalAbortListener) {
+        return;
+      }
+      externalSignal.removeEventListener("abort", abortDecision);
+      hasExternalAbortListener = false;
+    };
+    abortDecision = (): void => {
+      controller.abort();
+      releaseExternalAbortListener();
+      if (this.aiDecisionCache.get(seated.seatId) === decisionEntry) {
+        this.aiDecisionCache.delete(seated.seatId);
+      }
+    };
+
+    externalSignal.addEventListener("abort", abortDecision, { once: true });
+    const decisionPromise = Promise.resolve().then(() => {
+      // The external signal can abort after this entry is created but before
+      // the deferred source call runs. Do not start a provider request then.
+      if (controller.signal.aborted) {
+        return null;
+      }
+      return seated.decisionSource.decideBet(context, controller.signal);
+    });
+    decisionEntry = {
+      controller,
+      decisionPromise,
+      abort: abortDecision,
+      releaseExternalAbortListener,
+    };
+    this.aiDecisionCache.set(seated.seatId, decisionEntry);
+
+    // JavaScript cannot normally interrupt the setup above, but this keeps
+    // the entry safe with non-standard AbortSignal implementations too.
+    if (externalSignal.aborted) {
+      abortDecision();
+      return undefined;
+    }
+    return decisionEntry;
   }
 
   private getAllowedBetKinds(): readonly BetKind[] {
@@ -439,54 +507,53 @@ export class Room {
       (seated) =>
         !decisionSnapshot.bets.some((bet) => bet.seatId === seated.seatId),
     );
-    const seatDecisionEntries = seatsAwaitingDecisions.map((seated) => {
-      let decisionEntry = this.aiDecisionCache.get(seated.seatId);
-      if (decisionEntry === undefined) {
-        const controller = new AbortController();
-        const context = this.createPlayerDecisionContext(
-          decisionSnapshot,
-          seated.seatId,
-        );
-        const decisionPromise = Promise.resolve().then(() =>
-          seated.decisionSource.decideBet(context, controller.signal),
-        );
-        decisionEntry = { controller, decisionPromise };
-        this.aiDecisionCache.set(seated.seatId, decisionEntry);
-      }
-      return { seated, decisionEntry };
+    const seatDecisionEntries = seatsAwaitingDecisions.flatMap((seated) => {
+      const decisionEntry = this.getOrCreateAiDecisionEntry(
+        seated,
+        decisionSnapshot,
+        signal,
+      );
+      return decisionEntry === undefined ? [] : [{ seated, decisionEntry }];
     });
 
-    await Promise.all(seatDecisionEntries.map(async ({ seated, decisionEntry }) => {
-      let bet: PlayerBetDecision | null;
-      try {
-        bet = await decisionEntry.decisionPromise;
-      } catch {
-        // A failed source sits out for this round. Its rejected promise stays
-        // cached so a same-round scheduler restart cannot invoke it twice.
-        return;
-      }
+    try {
+      await Promise.all(seatDecisionEntries.map(async ({ seated, decisionEntry }) => {
+        let bet: PlayerBetDecision | null;
+        try {
+          bet = await decisionEntry.decisionPromise;
+        } catch {
+          // A non-cancellation failure sits out for this round. An aborted
+          // entry is removed immediately so a later restart can retry it.
+          return;
+        }
 
-      const snapshotAfterDecision = this.runtime.getSnapshot();
-      this.synchronizeAiDecisionCache(snapshotAfterDecision.roundId);
-      const canSubmitDecision =
-        !signal.aborted &&
-        snapshotAfterDecision.phase === "round_betting" &&
-        snapshotAfterDecision.roundId === decisionSnapshot.roundId &&
-        !snapshotAfterDecision.bets.some(
-          (placedBet) => placedBet.seatId === seated.seatId,
-        );
-      if (!canSubmitDecision || bet === null) {
-        return;
-      }
+        const snapshotAfterDecision = this.runtime.getSnapshot();
+        this.synchronizeAiDecisionCache(snapshotAfterDecision.roundId);
+        const canSubmitDecision =
+          !signal.aborted &&
+          !decisionEntry.controller.signal.aborted &&
+          snapshotAfterDecision.phase === "round_betting" &&
+          snapshotAfterDecision.roundId === decisionSnapshot.roundId &&
+          !snapshotAfterDecision.bets.some(
+            (placedBet) => placedBet.seatId === seated.seatId,
+          );
+        if (!canSubmitDecision || bet === null) {
+          return;
+        }
 
-      this.applyIntentAndStore({
-        type: "place_bet",
-        actorId: seated.actorId,
-        seatId: seated.seatId,
-        betKind: bet.betKind,
-        amount: bet.amount,
-      });
-    }));
+        this.applyIntentAndStore({
+          type: "place_bet",
+          actorId: seated.actorId,
+          seatId: seated.seatId,
+          betKind: bet.betKind,
+          amount: bet.amount,
+        });
+      }));
+    } finally {
+      for (const { decisionEntry } of seatDecisionEntries) {
+        decisionEntry.releaseExternalAbortListener();
+      }
+    }
   }
 
   /** Close the betting window using the authoritative system dealer intent. */

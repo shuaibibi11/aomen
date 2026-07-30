@@ -145,4 +145,87 @@ describe("Room AI decision boundary", () => {
       store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
     ).toHaveLength(0);
   });
+
+  it("does not invoke a decision source when its caller signal is already aborted", async () => {
+    const decideBet = vi.fn(async () => ({ betKind: "player" as const, amount: 100 }));
+    const room = new RoomManager(new MemoryEventStore()).createRoom({
+      tableId: asTableId("already-aborted-decision-table"),
+      rulePack: createRulePack(),
+      humanActorId: asActorId("already-aborted-decision-human"),
+      joinCredential: "already-aborted-decision-credential",
+      seatCount: 2,
+      aiCount: 1,
+      shoeSeed: "already-aborted-decision-seed",
+      aiDecisionSourceFactory: () => ({ decideBet }),
+    });
+    const callerController = new AbortController();
+
+    room.startAutomaticRound();
+    callerController.abort();
+    await room.placeAutomaticPlayerBets(callerController.signal);
+
+    expect(decideBet).not.toHaveBeenCalled();
+  });
+
+  it("aborts a pending decision with the caller signal, removes its listener, and retries safely", async () => {
+    const tableId = asTableId("aborted-decision-retry-table");
+    const store = new MemoryEventStore();
+    let firstDecisionSignal: AbortSignal | undefined;
+    let decisionAttempt = 0;
+    const decideBet = vi.fn(
+      (
+        _context: PlayerDecisionContext,
+        signal: AbortSignal,
+      ): Promise<{ betKind: "player"; amount: number }> => {
+        decisionAttempt += 1;
+        if (decisionAttempt === 1) {
+          firstDecisionSignal = signal;
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => reject(new Error("first decision aborted")),
+              { once: true },
+            );
+          });
+        }
+        return Promise.resolve({ betKind: "player", amount: 100 });
+      },
+    );
+    const room = new RoomManager(store).createRoom({
+      tableId,
+      rulePack: createRulePack(),
+      humanActorId: asActorId("aborted-decision-retry-human"),
+      joinCredential: "aborted-decision-retry-credential",
+      seatCount: 2,
+      aiCount: 1,
+      shoeSeed: "aborted-decision-retry-seed",
+      aiDecisionSourceFactory: () => ({ decideBet }),
+    });
+    const firstCallerController = new AbortController();
+    const removeExternalAbortListener = vi.spyOn(
+      firstCallerController.signal,
+      "removeEventListener",
+    );
+
+    room.startAutomaticRound();
+    const firstBetAttempt = room.placeAutomaticPlayerBets(firstCallerController.signal);
+    await Promise.resolve();
+    expect(decideBet).toHaveBeenCalledOnce();
+
+    firstCallerController.abort();
+
+    expect(firstDecisionSignal?.aborted).toBe(true);
+    expect(removeExternalAbortListener).toHaveBeenCalledWith(
+      "abort",
+      expect.any(Function),
+    );
+    await expect(firstBetAttempt).resolves.toBeUndefined();
+
+    await room.placeAutomaticPlayerBets(new AbortController().signal);
+
+    expect(decideBet).toHaveBeenCalledTimes(2);
+    expect(
+      store.listByTable(tableId).filter((event) => event.intent?.type === "place_bet"),
+    ).toHaveLength(1);
+  });
 });
