@@ -70,18 +70,18 @@ function resolveAllowedOrigin(value: string | undefined): string | undefined {
 
   try {
     const parsedUrl = new URL(value);
-    const isHttpOrigin = parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:";
+    const isHttpsOrigin = parsedUrl.protocol === "https:";
     const isExactOrigin = value === parsedUrl.origin;
     const hasNoUserInformation =
       parsedUrl.username.length === 0 && parsedUrl.password.length === 0;
 
-    if (!isHttpOrigin || !isExactOrigin || !hasNoUserInformation) {
+    if (!isHttpsOrigin || !isExactOrigin || !hasNoUserInformation) {
       throw new Error("invalid origin");
     }
     return parsedUrl.origin;
   } catch {
     // Do not include a configured value in errors because it may be sensitive.
-    throw new Error("ALLOWED_ORIGIN must be a canonical http or https origin");
+    throw new Error("ALLOWED_ORIGIN must be a canonical https origin");
   }
 }
 

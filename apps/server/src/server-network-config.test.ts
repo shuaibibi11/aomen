@@ -40,7 +40,7 @@ describe("resolveServerNetworkConfig", () => {
     },
   );
 
-  it("parses a concrete canonical HTTP origin", () => {
+  it("accepts a concrete canonical HTTPS origin", () => {
     expect(
       resolveServerNetworkConfig({
         ALLOWED_ORIGIN: "https://203.0.113.10:8443",
@@ -49,8 +49,11 @@ describe("resolveServerNetworkConfig", () => {
   });
 
   it.each([
+    "http://staging.example.test",
     "",
     " ",
+    " https://staging.example.test",
+    "https://staging.example.test ",
     "ftp://staging.example.test",
     "https://staging.example.test/path",
     "https://staging.example.test?query=yes",
@@ -59,7 +62,7 @@ describe("resolveServerNetworkConfig", () => {
     "HTTPS://staging.example.test",
   ])("rejects non-origin ALLOWED_ORIGIN %j", (origin) => {
     expect(() => resolveServerNetworkConfig({ ALLOWED_ORIGIN: origin })).toThrow(
-      "ALLOWED_ORIGIN must be a canonical http or https origin",
+      "ALLOWED_ORIGIN must be a canonical https origin",
     );
 
     if (origin.length > 1) {

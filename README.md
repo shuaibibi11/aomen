@@ -108,7 +108,7 @@ pnpm --filter @mct/server start
 - AI actors：默认 2 个 Basic AI（可仅在服务端启用 LLM）
 - rule pack：`dev/generic-macau-baccarat.v1.json`
 - loopback health：`http://127.0.0.1:8787/livez` 和 `http://127.0.0.1:8787/healthz`
-- loopback WebSocket：`ws://127.0.0.1:8787/ws`
+- local-only loopback WebSocket (only when `ALLOWED_ORIGIN` is unset)：`ws://127.0.0.1:8787/ws`
 
 ### Secure HTTP and WebSocket hosting
 
@@ -118,26 +118,27 @@ listener, not an Internet-facing TLS endpoint. `BIND_HOST` defaults to the
 exact value `127.0.0.1` and only accepts `127.0.0.1`, `::1`, or `localhost`.
 Do not use a direct public IP or expose `ws://` / `http://` traffic without TLS.
 
-Put a trusted Nginx TLS terminator in front of the process. It must proxy both
-`/ws` with WebSocket upgrade headers and the `/livez` and `/healthz` endpoints.
-The browser-facing endpoint must use an external HTTPS/WSS origin. For example,
-`https://203.0.113.10:8443` and `wss://203.0.113.10:8443/ws` use a documentation
-address only; replace it with the real deployment address before deployment.
+Staging remote sessions require Nginx to terminate TLS with an internal-CA
+certificate. Nginx must proxy both `/ws` with WebSocket upgrade headers and the
+`/livez` and `/healthz` endpoints over the loopback listener. The only supported
+staging browser endpoints are `https://<staging-ip>:8443` and
+`wss://<staging-ip>:8443/ws`; replace `<staging-ip>` with the actual staging IP.
+No-TLS direct IP access is not supported for remote sessions.
 
 | Variable | Requirement / default |
 | --- | --- |
 | `PORT` | Integer from `1` through `65535`; default `8787` |
 | `BIND_HOST` | Exact loopback host; default `127.0.0.1` |
-| `ALLOWED_ORIGIN` | Omit for controlled local loopback development. For a proxy deployment, set an exact canonical `http` or `https` origin; every `/ws` upgrade must carry the identical `Origin` header. |
+| `ALLOWED_ORIGIN` | Omit only for controlled local loopback development. For staging Nginx internal-CA TLS, set the exact canonical `https://<staging-ip>:8443` origin; every `/ws` upgrade must carry the identical `Origin` header. |
 | `WEBSOCKET_MAX_PAYLOAD_BYTES` | Positive integer up to `1048576`; default `65536` |
 | `WEBSOCKET_PER_MESSAGE_DEFLATE` | Unsupported as environment input and always disabled |
 
-In a proxy deployment, set `ALLOWED_ORIGIN` to the exact deployed browser
-origin, replacing the documentation value before deployment (for example,
-`ALLOWED_ORIGIN=https://203.0.113.10:8443`). Leave it unset only for controlled
-local development and test use. There is no wildcard CORS response. This slice
-only establishes the secure host boundary; it does not add cookie authentication
-or an administrative REST API.
+For staging remote sessions, set `ALLOWED_ORIGIN` to the exact browser origin:
+`ALLOWED_ORIGIN=https://<staging-ip>:8443`. Leave it unset only for controlled
+local development and test use, where the documented loopback `ws://` endpoint
+may be used directly. There is no wildcard CORS response. This slice only
+establishes the secure host boundary; it does not add cookie authentication or
+an administrative REST API.
 
 ### Server-only LLM decision configuration
 
@@ -165,7 +166,8 @@ pnpm --filter @mct/table-3d dev
 
 ### 受信内存配置启用 remote session
 
-远端配置必须由受信任的启动代码写入内存；下面只展示占位值，不能放真实 secret：
+仅在受控本地开发且 `ALLOWED_ORIGIN` 未设置时，可由受信任的启动代码将
+loopback `ws://` 远端配置写入内存；下面只展示占位值，不能放真实 secret：
 
 ```html
 <script>
@@ -179,9 +181,9 @@ pnpm --filter @mct/table-3d dev
 </script>
 ```
 
-在 Nginx TLS 部署中，remote session 必须使用与浏览器同源的 WSS endpoint：
-`wss://<staging-ip>:8443/ws`。不要省略 `/ws`，也不要让浏览器绕过 Nginx 直连
-loopback server。
+Staging remote sessions only use the Nginx internal-CA TLS WSS endpoint:
+`wss://<staging-ip>:8443/ws`. Do not omit `/ws` or let a browser bypass Nginx to
+connect directly to the loopback server.
 
 该对象必须在应用模块加载前写入。不要通过 URL/query string 传 credential；不要将 credential 打入日志，也不要写入 localStorage、sessionStorage、IndexedDB 或其他持久化存储。实现会忽略 URL 中的远端 endpoint、身份与 credential，避免不受信链接改变信任单元。
 
