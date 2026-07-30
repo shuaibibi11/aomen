@@ -516,8 +516,8 @@ export class Room {
       return decisionEntry === undefined ? [] : [{ seated, decisionEntry }];
     });
 
-    try {
-      await Promise.all(seatDecisionEntries.map(async ({ seated, decisionEntry }) => {
+    await Promise.all(seatDecisionEntries.map(async ({ seated, decisionEntry }) => {
+      try {
         let bet: PlayerBetDecision | null;
         try {
           bet = await decisionEntry.decisionPromise;
@@ -548,12 +548,12 @@ export class Room {
           betKind: bet.betKind,
           amount: bet.amount,
         });
-      }));
-    } finally {
-      for (const { decisionEntry } of seatDecisionEntries) {
+      } finally {
+        // Retain a settled outcome for this round, but no longer let a later
+        // scheduler stop abort and evict it while another seat is pending.
         decisionEntry.releaseExternalAbortListener();
       }
-    }
+    }));
   }
 
   /** Close the betting window using the authoritative system dealer intent. */

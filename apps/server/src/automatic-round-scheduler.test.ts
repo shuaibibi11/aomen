@@ -435,6 +435,85 @@ describe("AutomaticRoundScheduler", () => {
     ).toHaveLength(1);
   });
 
+  for (const fastDecisionOutcome of [
+    {
+      description: "null",
+      createDecision: () => Promise.resolve(null),
+    },
+    {
+      description: "rejection",
+      createDecision: () => Promise.reject(new Error("fast decision failed")),
+    },
+  ]) {
+    it(`retains a fast ${fastDecisionOutcome.description} decision while a pending decision retries after restart`, async () => {
+      const tableId = asTableId(
+        `settled-${fastDecisionOutcome.description}-scheduler-table`,
+      );
+      const store = new MemoryEventStore();
+      const fastDecideBet = vi.fn(() => fastDecisionOutcome.createDecision());
+      const slowDecisionSignals: AbortSignal[] = [];
+      const slowDecideBet = vi.fn(
+        (_context: unknown, signal: AbortSignal): Promise<null> => {
+          slowDecisionSignals.push(signal);
+          if (slowDecisionSignals.length === 1) {
+            return new Promise((_resolve, reject) => {
+              signal.addEventListener(
+                "abort",
+                () => reject(new Error("slow decision aborted")),
+                { once: true },
+              );
+            });
+          }
+          return Promise.resolve(null);
+        },
+      );
+      const room = new RoomManager(store).createRoom({
+        tableId,
+        rulePack: createRulePack(),
+        humanActorId: asActorId(
+          `settled-${fastDecisionOutcome.description}-human`,
+        ),
+        joinCredential: "settled-decision-credential",
+        seatCount: 3,
+        aiCount: 2,
+        shoeSeed: `settled-${fastDecisionOutcome.description}-seed`,
+        aiDecisionSourceFactory: ({ index }) => ({
+          decideBet: index === 1 ? fastDecideBet : slowDecideBet,
+        }),
+      });
+      const onError = vi.fn();
+      const scheduler = new AutomaticRoundScheduler(room, TIMING, { onError });
+      const unhandledRejections: unknown[] = [];
+      const captureUnhandledRejection = (reason: unknown): void => {
+        unhandledRejections.push(reason);
+      };
+      process.on("unhandledRejection", captureUnhandledRejection);
+
+      try {
+        scheduler.start();
+        await advance(0);
+
+        expect(fastDecideBet).toHaveBeenCalledOnce();
+        expect(slowDecideBet).toHaveBeenCalledOnce();
+
+        scheduler.stop();
+
+        expect(slowDecisionSignals[0]?.aborted).toBe(true);
+
+        scheduler.start();
+        await advance(0);
+
+        expect(fastDecideBet).toHaveBeenCalledOnce();
+        expect(slowDecideBet).toHaveBeenCalledTimes(2);
+        expect(onError).not.toHaveBeenCalled();
+        expect(unhandledRejections).toEqual([]);
+      } finally {
+        scheduler.stop();
+        process.off("unhandledRejection", captureUnhandledRejection);
+      }
+    });
+  }
+
   it("deals at most one card for each card interval and reaches round_end", async () => {
     const { room, store, tableId } = createRealRoom();
     const scheduler = new AutomaticRoundScheduler(room, TIMING);
