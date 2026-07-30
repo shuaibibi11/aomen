@@ -8,18 +8,16 @@ import {
 const TEST_API_KEY = "test-only-key";
 const COMPLETIONS_URL = "https://provider.example.test/v1/chat/completions";
 
-function createResponse(
-  overrides: Partial<OpenAiCompatibleFetchResponse> = {},
-): OpenAiCompatibleFetchResponse {
-  return {
-    ok: true,
-    status: 200,
-    headers: { get: () => null },
-    json: async () => ({
-      choices: [{ message: { content: '{"action":"sit_out"}' } }],
-    }),
-    ...overrides,
-  };
+function createJsonResponse(
+  responseBody: unknown = {
+    choices: [{ message: { content: '{"action":"sit_out"}' } }],
+  },
+  options: ResponseInit = {},
+): Response {
+  return new Response(
+    new TextEncoder().encode(JSON.stringify(responseBody)),
+    options,
+  );
 }
 
 function createRequest(signal: AbortSignal) {
@@ -33,15 +31,36 @@ function createRequest(signal: AbortSignal) {
   };
 }
 
+function createBodyThatTracksReaderAccess(
+  markBodyAsRead: () => void,
+): ReadableStream<Uint8Array> {
+  const responseBody = new ReadableStream<Uint8Array>();
+  const getOriginalReader = responseBody.getReader.bind(responseBody);
+  Object.defineProperty(responseBody, "getReader", {
+    value: () => {
+      markBodyAsRead();
+      return getOriginalReader();
+    },
+  });
+  return responseBody;
+}
+
 describe("OpenAiCompatibleLlmProvider", () => {
   it("uses and restores a stubbed global fetch when no transport is injected", async () => {
     const originalFetch = globalThis.fetch;
     const fetchCalls: Array<{ url: RequestInfo | URL; init: RequestInit | undefined }> = [];
     const stubbedGlobalFetch: typeof globalThis.fetch = async (url, init) => {
       fetchCalls.push({ url, init });
+      if (init?.redirect === "error") {
+        // Fetch rejects instead of replaying this authenticated POST on a redirect.
+        throw new TypeError("redirect was blocked");
+      }
       return new Response(
         JSON.stringify({ choices: [{ message: { content: '{"action":"sit_out"}' } }] }),
-        { status: 200 },
+        {
+          status: 302,
+          headers: { Location: "https://untrusted.example.test/redirect-target" },
+        },
       );
     };
     const signal = new AbortController().signal;
@@ -53,13 +72,19 @@ describe("OpenAiCompatibleLlmProvider", () => {
         apiKey: TEST_API_KEY,
       });
 
-      await expect(provider.complete(createRequest(signal))).resolves.toEqual({
-        content: '{"action":"sit_out"}',
+      const error = await provider.complete(createRequest(signal)).catch(
+        (caughtError: unknown) => caughtError,
+      );
+
+      expect(error).toMatchObject({
+        message: "LLM provider request failed before receiving a response",
       });
+      expect(String(error)).not.toContain(TEST_API_KEY);
       expect(fetchCalls).toEqual([{
         url: COMPLETIONS_URL,
         init: expect.objectContaining({
           method: "POST",
+          redirect: "error",
           headers: {
             Authorization: `Bearer ${TEST_API_KEY}`,
             "Content-Type": "application/json",
@@ -85,7 +110,7 @@ describe("OpenAiCompatibleLlmProvider", () => {
     const calls: Array<{ url: string; init: Parameters<OpenAiCompatibleFetch>[1] }> = [];
     const fetch: OpenAiCompatibleFetch = async (url, init) => {
       calls.push({ url, init });
-      return createResponse();
+      return createJsonResponse();
     };
     const signal = new AbortController().signal;
     const provider = new OpenAiCompatibleLlmProvider({
@@ -100,6 +125,7 @@ describe("OpenAiCompatibleLlmProvider", () => {
       url: COMPLETIONS_URL,
       init: {
         method: "POST",
+        redirect: "error",
         headers: {
           Authorization: `Bearer ${TEST_API_KEY}`,
           "Content-Type": "application/json",
@@ -117,9 +143,8 @@ describe("OpenAiCompatibleLlmProvider", () => {
   });
 
   it("maps content, safe token usage, and the provider request id", async () => {
-    const fetch: OpenAiCompatibleFetch = async () => createResponse({
-      headers: { get: (name) => name === "x-request-id" ? "request-42" : null },
-      json: async () => ({
+    const fetch: OpenAiCompatibleFetch = async () => createJsonResponse(
+      {
         choices: [{ message: { content: '{"action":"bet","betKind":"player","amount":100}' } }],
         usage: {
           prompt_tokens: 12,
@@ -127,8 +152,9 @@ describe("OpenAiCompatibleLlmProvider", () => {
           total_tokens: 20,
           ignored: "value",
         },
-      }),
-    });
+      },
+      { headers: { "x-request-id": "request-42" } },
+    );
     const provider = new OpenAiCompatibleLlmProvider({
       completionsUrl: COMPLETIONS_URL,
       apiKey: TEST_API_KEY,
@@ -143,16 +169,14 @@ describe("OpenAiCompatibleLlmProvider", () => {
   });
 
   it("ignores unsafe token usage values", async () => {
-    const fetch: OpenAiCompatibleFetch = async () => createResponse({
-      json: async () => ({
+    const fetch: OpenAiCompatibleFetch = async () => createJsonResponse({
         choices: [{ message: { content: '{"action":"sit_out"}' } }],
         usage: {
           prompt_tokens: -1,
           completion_tokens: 2.5,
           total_tokens: Number.MAX_SAFE_INTEGER + 1,
         },
-      }),
-    });
+      });
     const provider = new OpenAiCompatibleLlmProvider({
       completionsUrl: COMPLETIONS_URL,
       apiKey: TEST_API_KEY,
@@ -165,11 +189,9 @@ describe("OpenAiCompatibleLlmProvider", () => {
   });
 
   it("rejects malformed JSON with a safe provider error", async () => {
-    const fetch: OpenAiCompatibleFetch = async () => createResponse({
-      json: async () => {
-        throw new SyntaxError("response body must not escape");
-      },
-    });
+    const fetch: OpenAiCompatibleFetch = async () => new Response(
+      "response body must not escape",
+    );
     const provider = new OpenAiCompatibleLlmProvider({
       completionsUrl: COMPLETIONS_URL,
       apiKey: TEST_API_KEY,
@@ -183,8 +205,9 @@ describe("OpenAiCompatibleLlmProvider", () => {
 
   it("rejects a malformed completion shape without surfacing response data", async () => {
     const responseBody = "provider-body-must-not-surface";
-    const fetch: OpenAiCompatibleFetch = async () => createResponse({
-      json: async () => ({ choices: [{ message: { content: 42 } }], responseBody }),
+    const fetch: OpenAiCompatibleFetch = async () => createJsonResponse({
+      choices: [{ message: { content: 42 } }],
+      responseBody,
     });
     const provider = new OpenAiCompatibleLlmProvider({
       completionsUrl: COMPLETIONS_URL,
@@ -202,15 +225,16 @@ describe("OpenAiCompatibleLlmProvider", () => {
   });
 
   it("reports non-success statuses without reading the response body or exposing the key", async () => {
-    let jsonWasRead = false;
-    const fetch: OpenAiCompatibleFetch = async () => createResponse({
+    let bodyWasRead = false;
+    const response: OpenAiCompatibleFetchResponse = {
       ok: false,
       status: 429,
-      json: async () => {
-        jsonWasRead = true;
-        return { error: { message: "provider-body-must-not-surface" } };
-      },
-    });
+      headers: { get: () => null },
+      body: createBodyThatTracksReaderAccess(() => {
+        bodyWasRead = true;
+      }),
+    };
+    const fetch: OpenAiCompatibleFetch = async () => response;
     const provider = new OpenAiCompatibleLlmProvider({
       completionsUrl: COMPLETIONS_URL,
       apiKey: TEST_API_KEY,
@@ -223,7 +247,153 @@ describe("OpenAiCompatibleLlmProvider", () => {
 
     expect(error).toMatchObject({ message: "LLM provider request failed with status 429" });
     expect(String(error)).not.toContain(TEST_API_KEY);
-    expect(jsonWasRead).toBe(false);
+    expect(bodyWasRead).toBe(false);
+  });
+
+  it("rejects an advertised oversized response before reading its body", async () => {
+    let bodyWasRead = false;
+    const response: OpenAiCompatibleFetchResponse = {
+      ok: true,
+      status: 200,
+      headers: { get: () => "11" },
+      body: createBodyThatTracksReaderAccess(() => {
+        bodyWasRead = true;
+      }),
+    };
+    const fetch: OpenAiCompatibleFetch = async () => response;
+    const provider = new OpenAiCompatibleLlmProvider({
+      completionsUrl: COMPLETIONS_URL,
+      apiKey: TEST_API_KEY,
+      fetch,
+      maxResponseBodyBytes: 10,
+    });
+
+    const error = await provider.complete(createRequest(new AbortController().signal)).catch(
+      (caughtError: unknown) => caughtError,
+    );
+
+    expect(error).toMatchObject({
+      message: "LLM provider response exceeds the configured size limit",
+    });
+    expect(String(error)).not.toContain(TEST_API_KEY);
+    expect(bodyWasRead).toBe(false);
+  });
+
+  it("cancels an oversized stream without a Content-Length header", async () => {
+    let readerWasCancelled = false;
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      start(responseController) {
+        responseController.enqueue(new Uint8Array(8));
+        responseController.enqueue(new Uint8Array(8));
+      },
+      cancel() {
+        readerWasCancelled = true;
+      },
+    });
+    const response: OpenAiCompatibleFetchResponse = {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      body: oversizedBody,
+    };
+    const fetch: OpenAiCompatibleFetch = async () => response;
+    const provider = new OpenAiCompatibleLlmProvider({
+      completionsUrl: COMPLETIONS_URL,
+      apiKey: TEST_API_KEY,
+      fetch,
+      maxResponseBodyBytes: 10,
+    });
+
+    const error = await provider.complete(createRequest(new AbortController().signal)).catch(
+      (caughtError: unknown) => caughtError,
+    );
+
+    expect(error).toMatchObject({
+      message: "LLM provider response exceeds the configured size limit",
+    });
+    expect(String(error)).not.toContain(TEST_API_KEY);
+    expect(readerWasCancelled).toBe(true);
+  });
+
+  it("rejects missing response bodies with a safe provider error", async () => {
+    const fetch: OpenAiCompatibleFetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      body: null,
+    });
+    const provider = new OpenAiCompatibleLlmProvider({
+      completionsUrl: COMPLETIONS_URL,
+      apiKey: TEST_API_KEY,
+      fetch,
+    });
+
+    const error = await provider.complete(createRequest(new AbortController().signal)).catch(
+      (caughtError: unknown) => caughtError,
+    );
+
+    expect(error).toMatchObject({
+      message: "LLM provider returned an empty response body",
+    });
+    expect(String(error)).not.toContain(TEST_API_KEY);
+  });
+
+  it("rejects malformed Content-Length values without reading the body", async () => {
+    let bodyWasRead = false;
+    const response: OpenAiCompatibleFetchResponse = {
+      ok: true,
+      status: 200,
+      headers: { get: () => "1e6" },
+      body: createBodyThatTracksReaderAccess(() => {
+        bodyWasRead = true;
+      }),
+    };
+    const fetch: OpenAiCompatibleFetch = async () => response;
+    const provider = new OpenAiCompatibleLlmProvider({
+      completionsUrl: COMPLETIONS_URL,
+      apiKey: TEST_API_KEY,
+      fetch,
+    });
+
+    const error = await provider.complete(createRequest(new AbortController().signal)).catch(
+      (caughtError: unknown) => caughtError,
+    );
+
+    expect(error).toMatchObject({
+      message: "LLM provider returned an invalid Content-Length",
+    });
+    expect(String(error)).not.toContain(TEST_API_KEY);
+    expect(bodyWasRead).toBe(false);
+  });
+
+  it("converts response stream read failures into a safe provider error", async () => {
+    const responseBody = "provider-body-must-not-surface";
+    const failingBody = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error(responseBody);
+      },
+    });
+    const fetch: OpenAiCompatibleFetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      body: failingBody,
+    });
+    const provider = new OpenAiCompatibleLlmProvider({
+      completionsUrl: COMPLETIONS_URL,
+      apiKey: TEST_API_KEY,
+      fetch,
+    });
+
+    const error = await provider.complete(createRequest(new AbortController().signal)).catch(
+      (caughtError: unknown) => caughtError,
+    );
+
+    expect(error).toMatchObject({
+      message: "LLM provider response body could not be read",
+    });
+    expect(String(error)).not.toContain(responseBody);
+    expect(String(error)).not.toContain(TEST_API_KEY);
   });
 
   it("propagates an abort error from the injected fetch", async () => {

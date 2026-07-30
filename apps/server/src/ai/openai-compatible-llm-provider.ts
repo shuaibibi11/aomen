@@ -14,11 +14,12 @@ export interface OpenAiCompatibleFetchResponse {
   readonly ok: boolean;
   readonly status: number;
   readonly headers: OpenAiCompatibleResponseHeaders;
-  json(): Promise<unknown>;
+  readonly body: ReadableStream<Uint8Array> | null;
 }
 
 export interface OpenAiCompatibleFetchRequest {
   readonly method: "POST";
+  readonly redirect: "error";
   readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
   readonly signal: AbortSignal;
@@ -34,6 +35,8 @@ export interface OpenAiCompatibleLlmProviderOptions {
   readonly completionsUrl: string;
   readonly apiKey: string;
   readonly fetch?: OpenAiCompatibleFetch;
+  /** Allows trusted callers to lower the 1 MiB production response limit. */
+  readonly maxResponseBodyBytes?: number;
 }
 
 export class OpenAiCompatibleLlmProviderError extends Error {
@@ -49,12 +52,139 @@ const USAGE_FIELD_MAPPINGS = [
   ["total_tokens", "totalTokens"],
 ] as const satisfies readonly (readonly [string, keyof LlmUsage])[];
 
+const DEFAULT_MAX_RESPONSE_BODY_BYTES = 1024 * 1024;
+
+class ResponseBodyLimitExceededError extends Error {}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isAbortError(error: unknown): boolean {
   return isRecord(error) && error.name === "AbortError";
+}
+
+function validateMaxResponseBodyBytes(maxResponseBodyBytes: number | undefined): number {
+  if (maxResponseBodyBytes === undefined) {
+    return DEFAULT_MAX_RESPONSE_BODY_BYTES;
+  }
+
+  if (
+    !Number.isSafeInteger(maxResponseBodyBytes) ||
+    maxResponseBodyBytes <= 0
+  ) {
+    throw new OpenAiCompatibleLlmProviderError(
+      "LLM response size limit must be a positive safe integer",
+    );
+  }
+
+  return maxResponseBodyBytes;
+}
+
+function readContentLength(headers: OpenAiCompatibleResponseHeaders): number | undefined {
+  const contentLength = headers.get("content-length");
+  if (contentLength === null) {
+    return undefined;
+  }
+
+  const normalizedContentLength = contentLength.trim();
+  if (!/^\d+$/u.test(normalizedContentLength)) {
+    throw new OpenAiCompatibleLlmProviderError(
+      "LLM provider returned an invalid Content-Length",
+    );
+  }
+
+  const parsedContentLength = Number(normalizedContentLength);
+  if (!Number.isSafeInteger(parsedContentLength)) {
+    throw new OpenAiCompatibleLlmProviderError(
+      "LLM provider returned an invalid Content-Length",
+    );
+  }
+
+  return parsedContentLength;
+}
+
+async function cancelResponseReader(
+  responseReader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<void> {
+  try {
+    await responseReader.cancel();
+  } catch {
+    // Preserve the original read or size-limit failure over cleanup failures.
+  }
+}
+
+async function readResponseBytes(
+  response: OpenAiCompatibleFetchResponse,
+  maxResponseBodyBytes: number,
+): Promise<Uint8Array> {
+  const advertisedContentLength = readContentLength(response.headers);
+  if (
+    advertisedContentLength !== undefined &&
+    advertisedContentLength > maxResponseBodyBytes
+  ) {
+    throw new OpenAiCompatibleLlmProviderError(
+      "LLM provider response exceeds the configured size limit",
+    );
+  }
+
+  if (response.body === null) {
+    throw new OpenAiCompatibleLlmProviderError(
+      "LLM provider returned an empty response body",
+    );
+  }
+
+  const responseChunks: Uint8Array[] = [];
+  let responseByteLength = 0;
+  let responseReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+  try {
+    const openedResponseReader = response.body.getReader();
+    responseReader = openedResponseReader;
+    while (true) {
+      const { done, value: responseChunk } = await openedResponseReader.read();
+      if (done) {
+        break;
+      }
+
+      if (!(responseChunk instanceof Uint8Array)) {
+        throw new TypeError("response stream yielded non-byte data");
+      }
+
+      if (responseChunk.byteLength > maxResponseBodyBytes - responseByteLength) {
+        await cancelResponseReader(openedResponseReader);
+        throw new ResponseBodyLimitExceededError();
+      }
+
+      responseChunks.push(responseChunk);
+      responseByteLength += responseChunk.byteLength;
+    }
+  } catch (error) {
+    if (error instanceof ResponseBodyLimitExceededError) {
+      throw new OpenAiCompatibleLlmProviderError(
+        "LLM provider response exceeds the configured size limit",
+      );
+    }
+    if (isAbortError(error)) {
+      throw error;
+    }
+
+    if (responseReader !== undefined) {
+      await cancelResponseReader(responseReader);
+    }
+    throw new OpenAiCompatibleLlmProviderError(
+      "LLM provider response body could not be read",
+    );
+  }
+
+  const responseBytes = new Uint8Array(responseByteLength);
+  let responseByteOffset = 0;
+  for (const responseChunk of responseChunks) {
+    responseBytes.set(responseChunk, responseByteOffset);
+    responseByteOffset += responseChunk.byteLength;
+  }
+
+  return responseBytes;
 }
 
 function validateCompletionsUrl(completionsUrl: string): string {
@@ -123,6 +253,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
   private readonly apiKey: string;
   private readonly completionsUrl: string;
   private readonly fetch: OpenAiCompatibleFetch;
+  private readonly maxResponseBodyBytes: number;
 
   constructor(options: OpenAiCompatibleLlmProviderOptions) {
     if (options.apiKey.trim().length === 0) {
@@ -132,6 +263,9 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     this.apiKey = options.apiKey.trim();
     this.completionsUrl = validateCompletionsUrl(options.completionsUrl);
     this.fetch = options.fetch ?? createDefaultFetch();
+    this.maxResponseBodyBytes = validateMaxResponseBodyBytes(
+      options.maxResponseBodyBytes,
+    );
   }
 
   async complete(request: LlmCompletionRequest): Promise<LlmCompletionResponse> {
@@ -148,6 +282,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
           messages: request.messages,
         }),
         signal: request.signal,
+        redirect: "error",
       });
     } catch (error) {
       if (isAbortError(error)) {
@@ -166,9 +301,18 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
 
     let responseBody: unknown;
     try {
-      responseBody = await response.json();
+      const responseBytes = await readResponseBytes(
+        response,
+        this.maxResponseBodyBytes,
+      );
+      responseBody = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(responseBytes),
+      );
     } catch (error) {
       if (isAbortError(error)) {
+        throw error;
+      }
+      if (error instanceof OpenAiCompatibleLlmProviderError) {
         throw error;
       }
       throw new OpenAiCompatibleLlmProviderError("LLM provider returned invalid JSON");

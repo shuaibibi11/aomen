@@ -19,10 +19,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@mct/shared": "workspace:*",
-    "@mct/rule-packs": "workspace:*",
-    "@mct/table-engine": "workspace:*",
     "@mct/room-protocol": "workspace:*",
+    "@mct/rule-packs": "workspace:*",
+    "@mct/shared": "workspace:*",
+    "@mct/table-engine": "workspace:*",
+    "dotenv": "^17.4.2",
     "ws": "8.18.0"
   },
   "devDependencies": {

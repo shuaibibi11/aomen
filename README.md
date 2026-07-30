@@ -40,6 +40,12 @@ pnpm install --frozen-lockfile
 
 工作区包的运行时入口指向 `dist`。全新 clone/install 后应先执行 `pnpm build`，再执行依赖这些入口的 `pnpm test` 或 `pnpm typecheck`。
 
+### 本地 `.env` 配置
+
+Server 入口通过 `dotenv` 加载 `.env`，但这只适用于受控的本地开发。将 `.env.example` 复制为不受 Git 跟踪的 `.env`；仓库 `.gitignore` 已保护 `.env`。已有的 `process.env` 值优先，因此 shell 变量和部署注入的配置不会被本地文件覆盖。
+
+不要将 `.env` 用作生产 secret 的交付机制。生产环境应通过 secret manager 或 systemd `EnvironmentFile` 提供这些值。API token、credential 和 LLM 配置只能存在于 server：绝不可放入 frontend source、client bundle、browser storage、URL 或 log。
+
 ## 验证命令
 
 ```powershell
