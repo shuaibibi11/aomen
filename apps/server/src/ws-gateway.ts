@@ -29,11 +29,10 @@ import {
 } from "@mct/shared";
 import type { RoomManager } from "./room-manager.js";
 import type { RoomUpdate, UnsubscribeRoomUpdates } from "./room-events.js";
-import { DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES } from "./server-network-config.js";
 
 export interface WsGatewayOptions {
-  readonly port?: number;
-  readonly webSocketServer?: WebSocketServer;
+  /** Must use noServer so ServerTransport owns all upgrade boundaries. */
+  readonly webSocketServer: WebSocketServer;
   readonly roomManager: RoomManager;
   readonly onError?: (error: unknown) => void;
   /** Injectable monotonic wall clock for deterministic cache-expiry tests. */
@@ -48,6 +47,20 @@ interface SocketContext {
 }
 
 const MAXIMUM_REQUEST_RESULTS_PER_ACTOR = 1024;
+
+function requireNoServerWebSocketServer(webSocketServer: WebSocketServer): void {
+  try {
+    webSocketServer.address();
+  } catch (error) {
+    if (
+      error instanceof Error
+      && error.message === 'The server is operating in "noServer" mode'
+    ) {
+      return;
+    }
+  }
+  throw new Error("WsGateway requires a WebSocketServer configured with noServer: true");
+}
 
 interface CachedIntentResult {
   readonly intentFingerprint: string;
@@ -83,7 +96,6 @@ export function getIntentActorError(
 
 export class WsGateway {
   private readonly server: WebSocketServer;
-  private readonly listeningPromise: Promise<void>;
   private readonly roomManager: RoomManager;
   private readonly onError: (error: unknown) => void;
   private readonly now: () => number;
@@ -106,9 +118,7 @@ export class WsGateway {
   >();
 
   constructor(options: WsGatewayOptions) {
-    if ((options.port === undefined) === (options.webSocketServer === undefined)) {
-      throw new Error("Provide exactly one of port or webSocketServer");
-    }
+    requireNoServerWebSocketServer(options.webSocketServer);
     this.roomManager = options.roomManager;
     this.now = options.now ?? Date.now;
     this.maximumRequestResultsPerScope =
@@ -124,78 +134,9 @@ export class WsGateway {
       ((error) => {
         console.error("WebSocket gateway error:", error);
       });
-    this.server =
-      options.webSocketServer ??
-      new WebSocketServer({
-        port: options.port!,
-        maxPayload: DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES,
-        perMessageDeflate: false,
-      });
-    this.listeningPromise = this.createListeningPromise();
-    void this.listeningPromise.catch(() => undefined);
+    this.server = options.webSocketServer;
     this.server.on("error", (error) => this.reportError(error));
     this.server.on("connection", (socket) => this.handleConnection(socket));
-  }
-
-  private createListeningPromise(): Promise<void> {
-    if (this.readServerAddress() !== null) {
-      return Promise.resolve();
-    }
-
-    return new Promise((resolve, reject) => {
-      const handleListening = (): void => {
-        removeStartupListeners();
-        resolve();
-      };
-      const handleError = (error: Error): void => {
-        removeStartupListeners();
-        reject(error);
-      };
-      const handleClose = (): void => {
-        removeStartupListeners();
-        reject(new Error("WebSocket server closed before listening"));
-      };
-      const removeStartupListeners = (): void => {
-        this.server.off("listening", handleListening);
-        this.server.off("error", handleError);
-        this.server.off("close", handleClose);
-      };
-
-      this.server.once("listening", handleListening);
-      this.server.once("error", handleError);
-      this.server.once("close", handleClose);
-    });
-  }
-
-  /** Resolve once the underlying server has bound its TCP listener. */
-  waitUntilListening(): Promise<void> {
-    return this.listeningPromise;
-  }
-
-  /** Return the bound TCP port after listening has started. */
-  getPort(): number {
-    const address = this.readServerAddress();
-    if (address === null) {
-      throw new Error("WebSocket server is not listening");
-    }
-    if (typeof address === "string") {
-      throw new Error("WebSocket server is listening on a non-TCP address");
-    }
-    return address.port;
-  }
-
-  private readServerAddress(): ReturnType<WebSocketServer["address"]> {
-    try {
-      return this.server.address();
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === 'The server is operating in "noServer" mode'
-      ) {
-        return null;
-      }
-      throw error;
-    }
   }
 
   private handleConnection(socket: WebSocket): void {

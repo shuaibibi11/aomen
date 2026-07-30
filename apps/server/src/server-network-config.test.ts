@@ -5,7 +5,7 @@ import {
 } from "./server-network-config.js";
 
 describe("resolveServerNetworkConfig", () => {
-  it("uses loopback-only defaults with compression disabled", () => {
+  it("allows local loopback operation when ALLOWED_ORIGIN is omitted", () => {
     expect(resolveServerNetworkConfig({})).toEqual({
       port: 8787,
       host: "127.0.0.1",
@@ -40,12 +40,12 @@ describe("resolveServerNetworkConfig", () => {
     },
   );
 
-  it("accepts a canonical HTTP origin", () => {
+  it("parses a concrete canonical HTTP origin", () => {
     expect(
       resolveServerNetworkConfig({
-        ALLOWED_ORIGIN: "https://staging.example.test:8443",
+        ALLOWED_ORIGIN: "https://203.0.113.10:8443",
       }).allowedOrigin,
-    ).toBe("https://staging.example.test:8443");
+    ).toBe("https://203.0.113.10:8443");
   });
 
   it.each([

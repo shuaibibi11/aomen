@@ -3,7 +3,7 @@ import { WebSocket } from "ws";
 import {
   MemoryEventStore,
   RoomManager,
-  WsGateway,
+  ServerTransport,
 } from "@mct/server/testing";
 import { RoomConnection, type WebSocketFactory, type WebSocketLike } from "@mct/room-client";
 import { asActorId, asTableId, SYSTEM_DEALER } from "@mct/shared";
@@ -27,10 +27,10 @@ const rulePack: RulePack = {
   chipset: { currency: "HKD", denominations: [100] },
 };
 
-const openGateways: WsGateway[] = [];
+const openTransports: ServerTransport[] = [];
 
 afterEach(async () => {
-  await Promise.all(openGateways.splice(0).map((gateway) => gateway.close()));
+  await Promise.all(openTransports.splice(0).map((transport) => transport.close()));
 });
 
 describe("RemoteTableSession integration", () => {
@@ -46,16 +46,24 @@ describe("RemoteTableSession integration", () => {
       shoeSeed: "remote-integration-seed",
     });
     room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
-    const gateway = new WsGateway({ port: 0, roomManager });
-    openGateways.push(gateway);
-    await gateway.waitUntilListening();
+    const transport = new ServerTransport({
+      port: 0,
+      host: "127.0.0.1",
+      roomManager,
+      allowedOrigin: undefined,
+      maximumPayloadBytes: 65_536,
+      isReady: () => true,
+      onError: () => undefined,
+    });
+    openTransports.push(transport);
+    await transport.waitUntilListening();
     const websocketFactory: WebSocketFactory = {
       create(url) {
         return new WebSocket(url) as unknown as WebSocketLike;
       },
     };
     const connection = new RoomConnection({
-      url: `ws://127.0.0.1:${gateway.getPort()}`,
+      url: `ws://127.0.0.1:${transport.getPort()}/ws`,
       tableId,
       actorId,
       credential,

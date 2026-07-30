@@ -208,10 +208,16 @@ describe("ServerTransport HTTP endpoints", () => {
     const { transport } = await createTransport();
     const port = transport.getPort();
 
-    const [missingRoute, invalidHealthMethod, plainWebSocketRoute] = await Promise.all([
+    const [
+      missingRoute,
+      invalidHealthMethod,
+      plainWebSocketGetRoute,
+      plainWebSocketHeadRoute,
+    ] = await Promise.all([
       requestHttp(port, "/missing"),
       requestHttp(port, "/healthz", "POST"),
       requestHttp(port, "/ws"),
+      requestHttp(port, "/ws", "HEAD"),
     ]);
 
     expect(missingRoute.statusCode).toBe(404);
@@ -219,7 +225,16 @@ describe("ServerTransport HTTP endpoints", () => {
       statusCode: 405,
       headers: { allow: "GET, HEAD" },
     });
-    expect(plainWebSocketRoute.statusCode).toBe(426);
+    for (const response of [plainWebSocketGetRoute, plainWebSocketHeadRoute]) {
+      expect(response).toMatchObject({
+        statusCode: 426,
+        headers: {
+          connection: "Upgrade",
+          upgrade: "websocket",
+        },
+        body: "",
+      });
+    }
     expect(missingRoute.headers["access-control-allow-origin"]).toBeUndefined();
   });
 });

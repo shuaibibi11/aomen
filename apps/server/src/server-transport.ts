@@ -156,6 +156,7 @@ export class ServerTransport {
     if (path === "/ws" && (request.method === "GET" || request.method === "HEAD")) {
       response.statusCode = 426;
       response.setHeader("Connection", "Upgrade");
+      response.setHeader("Upgrade", "websocket");
       response.end();
       return;
     }

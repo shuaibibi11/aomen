@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { createServer, type Server as HttpServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import type { RulePack } from "@mct/rule-packs";
@@ -16,13 +17,21 @@ import {
 import type { EventStore } from "./memory-event-store.js";
 import { RoomFaultedError, RoomManager } from "./room-manager.js";
 import { DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES } from "./server-network-config.js";
+import { ServerTransport } from "./server-transport.js";
 import { getIntentActorError, WsGateway } from "./ws-gateway.js";
 
-const openGateways: WsGateway[] = [];
+interface GatewayTestServer {
+  readonly gateway: WsGateway;
+  readonly httpServer: HttpServer;
+}
+
+const openGatewayTestServers: GatewayTestServer[] = [];
+const openTransports: ServerTransport[] = [];
 const JOIN_CREDENTIAL = "gateway-test-credential";
 
 afterEach(async () => {
-  await Promise.all(openGateways.splice(0).map((gateway) => gateway.close()));
+  await Promise.all(openGatewayTestServers.splice(0).map(closeGatewayTestServer));
+  await Promise.all(openTransports.splice(0).map((transport) => transport.close()));
 });
 
 function createRulePack(): RulePack {
@@ -64,6 +73,27 @@ class ControllableEventStore implements EventStore {
   }
 }
 
+function closeHttpServer(httpServer: HttpServer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    httpServer.close((error) => {
+      if (error !== undefined && error.message !== "Server is not running") {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function closeGatewayTestServer(
+  testServer: GatewayTestServer,
+): Promise<void> {
+  await Promise.all([
+    testServer.gateway.close(),
+    closeHttpServer(testServer.httpServer),
+  ]);
+}
+
 async function createGateway(
   onError?: (error: unknown) => void,
   cacheOptions: {
@@ -84,28 +114,40 @@ async function createGateway(
     aiCount: 1,
     shoeSeed: "gateway-seed",
   });
-  const webSocketServer = new WebSocketServer({ port: 0 });
+  const httpServer = createServer();
+  const webSocketServer = new WebSocketServer({
+    noServer: true,
+    maxPayload: DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES,
+    perMessageDeflate: false,
+  });
   const gateway = new WsGateway({
     roomManager,
     webSocketServer,
-    onError,
+    onError: onError ?? (() => undefined),
     ...cacheOptions,
   });
-  openGateways.push(gateway);
-  if (webSocketServer.address() === null) {
-    await once(webSocketServer, "listening");
-  }
-  const address = webSocketServer.address();
+  httpServer.on("upgrade", (request, socket, head) => {
+    if (request.method !== "GET" || request.url !== "/ws") {
+      socket.destroy();
+      return;
+    }
+    webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+      webSocketServer.emit("connection", webSocket, request);
+    });
+  });
+  httpServer.listen({ port: 0, host: "127.0.0.1" });
+  await once(httpServer, "listening");
+  const address = httpServer.address();
   if (address === null || typeof address === "string") {
-    throw new Error("Expected a TCP WebSocket address");
+    throw new Error("Expected a TCP HTTP address");
   }
+  openGatewayTestServers.push({ gateway, httpServer });
   return {
-    gateway,
     humanActorId,
     room,
     store,
     tableId,
-    url: `ws://127.0.0.1:${address.port}`,
+    url: `ws://127.0.0.1:${address.port}/ws`,
     webSocketServer,
   };
 }
@@ -170,19 +212,64 @@ async function waitForSocketCloseCode(socket: WebSocket): Promise<number> {
   }
 }
 
-describe("WsGateway transport defaults", () => {
-  it("limits self-hosted messages to 64 KiB and disables compression", async () => {
+describe("WsGateway construction", () => {
+  it("rejects a WebSocket server attached outside the transport boundary", async () => {
+    const roomManager = new RoomManager(new ControllableEventStore());
+    const httpServer = createServer();
+    const webSocketServer = new WebSocketServer({ server: httpServer });
+    let gateway: WsGateway | undefined;
+
+    try {
+      expect(() => {
+        gateway = new WsGateway({ roomManager, webSocketServer });
+      }).toThrow("WsGateway requires a WebSocketServer configured with noServer: true");
+    } finally {
+      if (gateway !== undefined) {
+        await gateway.close();
+      } else {
+        await new Promise<void>((resolve, reject) => {
+          webSocketServer.close((error) => {
+            if (error !== undefined) {
+              reject(error);
+              return;
+            }
+            resolve();
+          });
+        });
+      }
+    }
+  });
+
+  it("accepts an injected noServer WebSocket server", async () => {
+    const roomManager = new RoomManager(new ControllableEventStore());
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    const gateway = new WsGateway({ roomManager, webSocketServer });
+
+    try {
+      expect(gateway).toBeInstanceOf(WsGateway);
+    } finally {
+      await gateway.close();
+    }
+  });
+});
+
+describe("Shared transport WebSocket defaults", () => {
+  it("limits messages to 64 KiB and disables compression", async () => {
     const store = new ControllableEventStore();
     const roomManager = new RoomManager(store);
-    const gateway = new WsGateway({
+    const transport = new ServerTransport({
       port: 0,
+      host: "127.0.0.1",
       roomManager,
+      allowedOrigin: undefined,
+      maximumPayloadBytes: DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES,
+      isReady: () => true,
       onError: () => undefined,
     });
-    openGateways.push(gateway);
-    await gateway.waitUntilListening();
+    openTransports.push(transport);
+    await transport.waitUntilListening();
 
-    const socket = new WebSocket(`ws://127.0.0.1:${gateway.getPort()}`, {
+    const socket = new WebSocket(`ws://127.0.0.1:${transport.getPort()}/ws`, {
       perMessageDeflate: true,
     });
     socket.once("error", () => undefined);

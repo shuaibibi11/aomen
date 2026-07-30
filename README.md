@@ -95,6 +95,7 @@ Set-Location "E:\path\to\macau-casino-training"
 $env:DEMO_ROOM_CREDENTIAL = "replace-with-a-temporary-development-value"
 $env:PORT = "8787"
 $env:BIND_HOST = "127.0.0.1"
+# Leave ALLOWED_ORIGIN unset for local loopback development.
 $env:WEBSOCKET_MAX_PAYLOAD_BYTES = "65536"
 pnpm --filter @mct/server start
 ```
@@ -119,22 +120,24 @@ Do not use a direct public IP or expose `ws://` / `http://` traffic without TLS.
 
 Put a trusted Nginx TLS terminator in front of the process. It must proxy both
 `/ws` with WebSocket upgrade headers and the `/livez` and `/healthz` endpoints.
-The browser-facing endpoint should use an external HTTPS/WSS origin such as
-`https://<staging-ip>:8443` and `wss://<staging-ip>:8443/ws`; the values are
-placeholders, not deployment addresses.
+The browser-facing endpoint must use an external HTTPS/WSS origin. For example,
+`https://203.0.113.10:8443` and `wss://203.0.113.10:8443/ws` use a documentation
+address only; replace it with the real deployment address before deployment.
 
 | Variable | Requirement / default |
 | --- | --- |
 | `PORT` | Integer from `1` through `65535`; default `8787` |
 | `BIND_HOST` | Exact loopback host; default `127.0.0.1` |
-| `ALLOWED_ORIGIN` | Optional exact canonical `http` or `https` origin. When set, every `/ws` upgrade must carry the identical `Origin` header. |
+| `ALLOWED_ORIGIN` | Omit for controlled local loopback development. For a proxy deployment, set an exact canonical `http` or `https` origin; every `/ws` upgrade must carry the identical `Origin` header. |
 | `WEBSOCKET_MAX_PAYLOAD_BYTES` | Positive integer up to `1048576`; default `65536` |
 | `WEBSOCKET_PER_MESSAGE_DEFLATE` | Unsupported as environment input and always disabled |
 
-Set `ALLOWED_ORIGIN=https://<staging-ip>:8443` in a proxy deployment. Leaving
-it unset is only for controlled local development and test use. There is no
-wildcard CORS response. This slice only establishes the secure host boundary;
-it does not add cookie authentication or an administrative REST API.
+In a proxy deployment, set `ALLOWED_ORIGIN` to the exact deployed browser
+origin, replacing the documentation value before deployment (for example,
+`ALLOWED_ORIGIN=https://203.0.113.10:8443`). Leave it unset only for controlled
+local development and test use. There is no wildcard CORS response. This slice
+only establishes the secure host boundary; it does not add cookie authentication
+or an administrative REST API.
 
 ### Server-only LLM decision configuration
 

@@ -1,3 +1,5 @@
+import { once } from "node:events";
+import { createServer, type Server as HttpServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import type { RulePack } from "@mct/rule-packs";
@@ -6,12 +8,14 @@ import { asActorId, asTableId, SYSTEM_DEALER } from "@mct/shared";
 import { AutomaticRoundScheduler } from "./automatic-round-scheduler.js";
 import { MemoryEventStore } from "./memory-event-store.js";
 import { RoomManager, type Room } from "./room-manager.js";
+import { ServerTransport } from "./server-transport.js";
 import { WebSocketTestClient } from "./test/websocket-test-client.js";
 import { WsGateway } from "./ws-gateway.js";
 
 const JOIN_CREDENTIAL = "integration-credential";
 const openClients: WebSocketTestClient[] = [];
 const openGateways: WsGateway[] = [];
+const openTransports: ServerTransport[] = [];
 const runningSchedulers: AutomaticRoundScheduler[] = [];
 
 async function withTimeout<T>(
@@ -77,7 +81,23 @@ afterEach(async () => {
   }
   await Promise.all(openClients.splice(0).map((client) => client.close()));
   await Promise.all(openGateways.splice(0).map((gateway) => gateway.close()));
+  await Promise.all(openTransports.splice(0).map((transport) => transport.close()));
 });
+
+function closeHttpServer(httpServer: HttpServer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    httpServer.close((error) => {
+      const serverIsNotRunning =
+        error?.message === "Server is not running"
+        || error?.message === "Server is not running.";
+      if (error !== undefined && !serverIsNotRunning) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
 
 function createRulePack(): RulePack {
   return {
@@ -110,17 +130,25 @@ function createRoom(roomManager: RoomManager, name: string): Room {
   });
 }
 
-async function createSelfHostedGateway() {
+async function createGatewayTransport() {
   const store = new MemoryEventStore();
   const roomManager = new RoomManager(store);
-  const gateway = new WsGateway({ port: 0, roomManager });
-  openGateways.push(gateway);
-  await gateway.waitUntilListening();
+  const transport = new ServerTransport({
+    port: 0,
+    host: "127.0.0.1",
+    roomManager,
+    allowedOrigin: undefined,
+    maximumPayloadBytes: 65_536,
+    isReady: () => true,
+    onError: () => undefined,
+  });
+  openTransports.push(transport);
+  await transport.waitUntilListening();
   return {
-    gateway,
+    transport,
     roomManager,
     store,
-    url: `ws://127.0.0.1:${gateway.getPort()}`,
+    url: `ws://127.0.0.1:${transport.getPort()}/ws`,
   };
 }
 
@@ -162,7 +190,7 @@ async function waitForUpdate(client: WebSocketTestClient) {
 
 describe("WsGateway real WebSocket integration", () => {
   it("rejects repeated client buy-in and cash-out intents without changing runtime state", async () => {
-    const { roomManager, store, url } = await createSelfHostedGateway();
+    const { roomManager, store, url } = await createGatewayTransport();
     const room = createRoom(roomManager, "client-funding-boundary");
     const client = await connect(url);
     await join(client, room);
@@ -196,7 +224,7 @@ describe("WsGateway real WebSocket integration", () => {
   });
 
   it("replays an executed request across reconnects without submitting or broadcasting again", async () => {
-    const { roomManager, store, url } = await createSelfHostedGateway();
+    const { roomManager, store, url } = await createGatewayTransport();
     const room = createRoom(roomManager, "reconnect-idempotency");
     room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
     const firstClient = await connect(url);
@@ -238,7 +266,7 @@ describe("WsGateway real WebSocket integration", () => {
   });
 
   it("rejects a reused request identifier carrying a different intent", async () => {
-    const { roomManager, store, url } = await createSelfHostedGateway();
+    const { roomManager, store, url } = await createGatewayTransport();
     const room = createRoom(roomManager, "request-conflict");
     room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
     const client = await connect(url);
@@ -274,7 +302,7 @@ describe("WsGateway real WebSocket integration", () => {
   });
 
   it("rejects overflow without evicting a live request from the actor cache", async () => {
-    const { roomManager, store, url } = await createSelfHostedGateway();
+    const { roomManager, store, url } = await createGatewayTransport();
     const room = createRoom(roomManager, "request-eviction");
     room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
     const client = await connect(url);
@@ -317,7 +345,7 @@ describe("WsGateway real WebSocket integration", () => {
   }, 20_000);
 
   it("isolates identical request identifiers between tables and actors", async () => {
-    const { roomManager, url } = await createSelfHostedGateway();
+    const { roomManager, url } = await createGatewayTransport();
     const firstRoom = createRoom(roomManager, "request-scope-first");
     const secondRoom = createRoom(roomManager, "request-scope-second");
     firstRoom.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
@@ -347,37 +375,14 @@ describe("WsGateway real WebSocket integration", () => {
     expect(results.every((message) => message.type === "intent_result")).toBe(true);
   });
 
-  it("self-hosts on an ephemeral port and reports its listening lifecycle", async () => {
-    const roomManager = new RoomManager(new MemoryEventStore());
-    const gateway = new WsGateway({ port: 0, roomManager });
-    openGateways.push(gateway);
+  it("listens on an ephemeral port through the shared server transport", async () => {
+    const { transport } = await createGatewayTransport();
 
-    await gateway.waitUntilListening();
-    expect(gateway.getPort()).toBeGreaterThan(0);
-  });
-
-  it("reports a clear error before an injected server is listening", async () => {
-    const roomManager = new RoomManager(new MemoryEventStore());
-    const webSocketServer = new WebSocketServer({ noServer: true });
-    const gateway = new WsGateway({ roomManager, webSocketServer });
-    openGateways.push(gateway);
-
-    expect(() => gateway.getPort()).toThrow("WebSocket server is not listening");
-    await gateway.close();
-  });
-
-  it("keeps injected WebSocketServer mode available", async () => {
-    const roomManager = new RoomManager(new MemoryEventStore());
-    const webSocketServer = new WebSocketServer({ port: 0 });
-    const gateway = new WsGateway({ roomManager, webSocketServer });
-    openGateways.push(gateway);
-
-    await gateway.waitUntilListening();
-    expect(gateway.getPort()).toBeGreaterThan(0);
+    expect(transport.getPort()).toBeGreaterThan(0);
   });
 
   it("covers joined, unknown room, not joined, malformed JSON, and ping/pong", async () => {
-    const { roomManager, url } = await createSelfHostedGateway();
+    const { roomManager, url } = await createGatewayTransport();
     const room = createRoom(roomManager, "matrix-room");
     const joinedClient = await connect(url);
     expect(await join(joinedClient, room)).toMatchObject({ type: "joined" });
@@ -411,7 +416,7 @@ describe("WsGateway real WebSocket integration", () => {
   });
 
   it("broadcasts aligned event and snapshot pairs to both clients in one room", async () => {
-    const { roomManager, url } = await createSelfHostedGateway();
+    const { roomManager, url } = await createGatewayTransport();
     const room = createRoom(roomManager, "shared-room");
     const firstClient = await connect(url);
     const secondClient = await connect(url);
@@ -432,7 +437,7 @@ describe("WsGateway real WebSocket integration", () => {
   });
 
   it("isolates broadcasts between rooms", async () => {
-    const { roomManager, url } = await createSelfHostedGateway();
+    const { roomManager, url } = await createGatewayTransport();
     const firstRoom = createRoom(roomManager, "isolated-first");
     const secondRoom = createRoom(roomManager, "isolated-second");
     const firstClient = await connect(url);
@@ -450,7 +455,7 @@ describe("WsGateway real WebSocket integration", () => {
   });
 
   it("broadcasts scheduler lifecycle without client intent submissions", async () => {
-    const { roomManager, url } = await createSelfHostedGateway();
+    const { roomManager, url } = await createGatewayTransport();
     const room = createRoom(roomManager, "scheduled-room");
     const client = await connect(url);
     await join(client, room);
@@ -476,7 +481,7 @@ describe("WsGateway real WebSocket integration", () => {
   });
 
   it("unsubscribes after the final client disconnects", async () => {
-    const { roomManager, url } = await createSelfHostedGateway();
+    const { roomManager, url } = await createGatewayTransport();
     const room = createRoom(roomManager, "disconnect-room");
     const originalSubscribe = roomManager.subscribe.bind(roomManager);
     let resolveUnsubscribed!: () => void;
@@ -501,16 +506,15 @@ describe("WsGateway real WebSocket integration", () => {
   });
 
   it("awaits socket and server shutdown and is safe to close repeatedly", async () => {
-    const { gateway, roomManager, url } = await createSelfHostedGateway();
+    const { transport, roomManager, url } = await createGatewayTransport();
     const room = createRoom(roomManager, "close-room");
     const client = await connect(url);
     await join(client, room);
 
-    await Promise.all([gateway.close(), gateway.close()]);
+    await Promise.all([transport.close(), transport.close()]);
     await client.close();
-    await gateway.close();
+    await transport.close();
 
-    expect(() => gateway.getPort()).toThrow(/not listening/i);
     await expect(WebSocketTestClient.connect(url)).rejects.toThrow();
   });
 
@@ -546,7 +550,7 @@ describe("WsGateway real WebSocket integration", () => {
       signalUpgradePending = resolve;
     });
     const webSocketServer = new WebSocketServer({
-      port: 0,
+      noServer: true,
       verifyClient: (_info, completeVerification) => {
         allowUpgrade = () => completeVerification(true);
         signalUpgradePending();
@@ -556,9 +560,23 @@ describe("WsGateway real WebSocket integration", () => {
       roomManager: new RoomManager(new MemoryEventStore()),
       webSocketServer,
     });
-    openGateways.push(gateway);
-    await gateway.waitUntilListening();
-    const url = `ws://127.0.0.1:${gateway.getPort()}`;
+    const httpServer = createServer();
+    httpServer.on("upgrade", (request, socket, head) => {
+      if (request.method !== "GET" || request.url !== "/ws") {
+        socket.destroy();
+        return;
+      }
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        webSocketServer.emit("connection", webSocket, request);
+      });
+    });
+    httpServer.listen({ port: 0, host: "127.0.0.1" });
+    await once(httpServer, "listening");
+    const address = httpServer.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("Expected a TCP HTTP address");
+    }
+    const url = `ws://127.0.0.1:${address.port}/ws`;
     const racingSocket = new WebSocket(url);
 
     try {
@@ -570,12 +588,14 @@ describe("WsGateway real WebSocket integration", () => {
       await withTimeout(waitForSocketClose(racingSocket), 1_000, "racing socket close");
 
       expect(racingSocket.readyState).toBe(WebSocket.CLOSED);
+      // This noServer test harness owns its listener independently of the gateway.
+      await closeHttpServer(httpServer);
       await verifyConnectionRefused(url, 1_000);
     } finally {
       if (racingSocket.readyState !== WebSocket.CLOSED) {
         racingSocket.terminate();
       }
-      await gateway.close();
+      await Promise.all([gateway.close(), closeHttpServer(httpServer)]);
     }
   });
 });
