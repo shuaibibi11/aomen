@@ -7,6 +7,12 @@
  */
 import { asActorId, asTableId, type TableId } from "@mct/shared";
 import { loadRulePack } from "@mct/rule-packs";
+import {
+  createAiDecisionSourceFactory,
+  resolveAiRuntimeConfig,
+  type AiRuntimeEnvironment,
+} from "./ai/ai-runtime-config.js";
+import type { OpenAiCompatibleFetch } from "./ai/openai-compatible-llm-provider.js";
 import { MemoryEventStore } from "./memory-event-store.js";
 import {
   RoomManager,
@@ -26,6 +32,8 @@ export const DEFAULT_AUTOMATIC_ROUND_TIMING: AutomaticRoundTiming = {
 };
 
 export interface AppOptions {
+  /** Server-only environment values; defaults to the process environment. */
+  readonly environment?: AiRuntimeEnvironment;
   /** Relative path of the rule pack to load for the demo table. */
   readonly rulePackPath?: string;
   /** Table id for the demo room. */
@@ -38,6 +46,8 @@ export interface AppOptions {
   readonly automaticRoundTiming?: AutomaticRoundTiming;
   /** Optional provider-neutral AI source factory for the demo seats. */
   readonly aiDecisionSourceFactory?: AiDecisionSourceFactory;
+  /** Injectable HTTP transport used only by configured LLM decision sources. */
+  readonly llmFetch?: OpenAiCompatibleFetch;
 }
 
 export interface App {
@@ -49,9 +59,12 @@ export interface App {
   readonly automaticRoundTiming: AutomaticRoundTiming;
 }
 
-function resolveDemoRoomCredential(options: AppOptions): string {
+function resolveDemoRoomCredential(
+  options: AppOptions,
+  environment: AiRuntimeEnvironment,
+): string {
   const configuredCredential =
-    options.demoRoomCredential ?? process.env.DEMO_ROOM_CREDENTIAL;
+    options.demoRoomCredential ?? environment.DEMO_ROOM_CREDENTIAL;
 
   if (configuredCredential === undefined || configuredCredential.trim() === "") {
     throw new Error(
@@ -68,7 +81,12 @@ function resolveDemoRoomCredential(options: AppOptions): string {
  * scheduler or by explicit calls without a human dealer present.
  */
 export async function createApp(options: AppOptions = {}): Promise<App> {
-  const demoRoomCredential = resolveDemoRoomCredential(options);
+  const environment = options.environment ?? process.env;
+  const demoRoomCredential = resolveDemoRoomCredential(options, environment);
+  const aiDecisionSourceFactory = options.aiDecisionSourceFactory ??
+    createAiDecisionSourceFactory(resolveAiRuntimeConfig(environment), {
+      ...(options.llmFetch === undefined ? {} : { fetch: options.llmFetch }),
+    });
   const store = new MemoryEventStore();
   const roomManager = new RoomManager(store);
 
@@ -85,9 +103,9 @@ export async function createApp(options: AppOptions = {}): Promise<App> {
     seatCount: 7,
     aiCount: 2,
     shoeSeed: options.shoeSeed ?? "demo-seed",
-    ...(options.aiDecisionSourceFactory === undefined
+    ...(aiDecisionSourceFactory === undefined
       ? {}
-      : { aiDecisionSourceFactory: options.aiDecisionSourceFactory }),
+      : { aiDecisionSourceFactory }),
   });
   const automaticRoundTiming =
     options.automaticRoundTiming ?? DEFAULT_AUTOMATIC_ROUND_TIMING;

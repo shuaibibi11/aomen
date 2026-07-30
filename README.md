@@ -74,9 +74,24 @@ pnpm --filter @mct/server start
 - table：`demo-table`
 - human actor：`demo-human`
 - seats：7
-- AI actors：2 个 Basic AI
+- AI actors：默认 2 个 Basic AI（可仅在服务端启用 LLM）
 - rule pack：`dev/generic-macau-baccarat.v1.json`
 - WebSocket：`ws://127.0.0.1:8787`（按实际 host/port 调整）
+
+### Server-only LLM decision configuration
+
+`AI_MODE` 默认是 `basic`，因此不配置 LLM 时仍使用已有的 Basic AI。设置为精确的 `llm` 后，server 会在创建房间前校验以下**服务端环境变量**；缺失或无效配置会使启动失败，而不会在运行中静默降级配置：
+
+| 变量 | 要求 / 默认值 |
+| --- | --- |
+| `DEMO_ROOM_CREDENTIAL` | 必填；演示房间 client join credential |
+| `AI_MODE` | `basic`（默认）或 `llm` |
+| `LLM_API_KEY` | `AI_MODE=llm` 时必填；仅由部署平台的 secret manager 注入 |
+| `LLM_COMPLETIONS_URL` | HTTPS URL；默认 `https://platform.rainflowtb.com/v1/chat/completions` |
+| `LLM_MODEL` | 非空；默认 `deepseek-chat` |
+| `LLM_TIMEOUT_MS` | 正安全整数，最大 `60000`；默认 `4500` |
+
+LLM key、请求 URL 和模型配置只存在于 server 进程环境中：它们不会写入房间事件、WebSocket 协议、前端 bundle 或浏览器存储。真实外部 LLM 调用不在本切片的测试范围内；测试通过注入的 fetch mock 验证请求，而不发起任何平台 HTTP 请求。
 
 ## 启动 table-3d
 

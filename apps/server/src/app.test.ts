@@ -16,6 +16,35 @@ afterEach(() => {
 });
 
 describe("createApp room credential configuration", () => {
+  it("fails fast when LLM mode lacks server-only configuration", async () => {
+    await expect(createApp({
+      demoRoomCredential: "llm-config-test-credential",
+      environment: { AI_MODE: "llm" },
+    })).rejects.toThrow("LLM_API_KEY must be configured when AI_MODE=llm");
+  });
+
+  it("uses injected environment credentials and lets an explicit factory override config", async () => {
+    delete process.env.DEMO_ROOM_CREDENTIAL;
+    const decideBet = vi.fn(async () => ({
+      betKind: "player" as const,
+      amount: 100,
+    }));
+    const aiDecisionSourceFactory = vi.fn(() => ({ decideBet }));
+
+    const app = await createApp({
+      environment: {
+        DEMO_ROOM_CREDENTIAL: "injected-environment-credential",
+        AI_MODE: "unsupported-mode",
+      },
+      aiDecisionSourceFactory,
+    });
+    app.demoRoom.startAutomaticRound();
+    await app.demoRoom.placeAutomaticPlayerBets(new AbortController().signal);
+
+    expect(aiDecisionSourceFactory).toHaveBeenCalledTimes(2);
+    expect(decideBet).toHaveBeenCalledTimes(2);
+  });
+
   it("passes an injected AI decision factory to the demo room", async () => {
     const decideBet = vi.fn(async () => ({
       betKind: "tie" as const,
