@@ -184,6 +184,27 @@ reintroduces a `WsGateway` port option or a public gateway `listen` API.
 
 LLM key、请求 URL 和模型配置只存在于 server 进程环境中：它们不会写入房间事件、WebSocket 协议、前端 bundle 或浏览器存储。真实外部 LLM 调用不在本切片的测试范围内；测试通过注入的 fetch mock 验证请求，而不发起任何平台 HTTP 请求。
 
+### Dormant LLM control plane foundation
+
+`LLM_CONTROL_PLANE_MODE` defaults to the exact value `disabled`. The optional
+`postgres` foundation stores provider, endpoint, encrypted credential, model,
+route, prompt-template version, revision, and redacted audit data. It requires
+`PERSISTENCE_MODE=postgres`, a base64url 32-byte
+`LLM_CREDENTIAL_ENCRYPTION_KEY`, and the exact comma-separated DNS hostname
+configuration in `LLM_ENDPOINT_ALLOWED_HOSTS` (or its documented safe default
+allowlist). Never put a real key in `.env.example`, Git, browser code, URLs, or
+logs.
+
+The endpoint policy accepts only canonical HTTPS endpoints on explicitly allowed
+DNS hostnames. Production deployments must also enforce an egress firewall or
+proxy: application allowlisting cannot safely solve DNS rebinding for a trusted
+upstream hostname. This foundation does not make provider requests.
+
+The existing `AI_MODE=llm` path remains the legacy environment-configured,
+single-provider decision path until a later routing-runtime slice. The control
+plane does not currently drive games, live Rooms, or the active AI decision
+source, and this slice intentionally adds no administrator HTTP UI or REST API.
+
 ## 启动 table-3d
 
 ```powershell
@@ -252,5 +273,6 @@ connect directly to the loopback server.
 - [2026-07-30 本地验收记录（非 CI）](docs/development/validation-2026-07-29.md)
 - [Server testing boundary](docs/development/server-testing.md)
 - [对局架构说明](docs/architecture/game-architecture.md)
+- [LLM control plane foundation](docs/architecture/llm-control-plane.md)
 - [百家乐新手训练指南](docs/guides/baccarat-beginner-guide.md)
 - [Git 与外部 worktree 工作流](docs/development/git-workflow.md)
