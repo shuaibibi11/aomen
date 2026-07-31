@@ -59,11 +59,43 @@ export interface PromptTemplateVersion {
   readonly checksum: string;
 }
 
+/**
+ * Runtime-only route data captured at one routing revision. These fields are
+ * copied from their source records so a request never needs to re-read mutable
+ * provider, endpoint, model, or credential configuration.
+ */
+export interface ResolvedRoute {
+  readonly id: string;
+  readonly scope: LlmRouteScope;
+  readonly priority: number;
+  readonly providerId: string;
+  readonly endpointId: string;
+  readonly modelId: string;
+  readonly credentialId: string;
+  readonly providerKind: LlmProviderKind;
+  readonly endpointUrl: string;
+  readonly upstreamModelName: string;
+  readonly credentialKeyVersion: number;
+  readonly attemptTimeoutMs: number;
+  readonly maxResponseBodyBytes: number;
+}
+
+/** The immutable content copy available to a routing request. */
+export interface ActivePromptTemplateSnapshot {
+  readonly version: number;
+  readonly checksum: string;
+  readonly content: string;
+}
+
+/**
+ * Internal runtime read model. This deliberately differs from administrator
+ * resource projections and never contains plaintext secrets or ciphertext.
+ */
 export interface RoutingSnapshot {
   readonly revision: number;
   readonly scope: LlmRouteScope;
-  readonly activeTemplate?: PromptTemplateVersion;
-  readonly routes: readonly Route[];
+  readonly activeTemplate: ActivePromptTemplateSnapshot | null;
+  readonly routes: readonly ResolvedRoute[];
 }
 
 export interface AuditMetadata {

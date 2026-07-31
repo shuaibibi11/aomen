@@ -5,6 +5,15 @@ export interface PostgresMigration {
   readonly sql: string;
 }
 
+export interface PostgresMigrationOptions {
+  /**
+   * An optional isolated schema for tests. The identifier is validated before
+   * interpolation and the transaction-local search path keeps all migration
+   * SQL scoped to that schema.
+   */
+  readonly migrationSchema?: string;
+}
+
 const MIGRATION_ADVISORY_LOCK_KEY = 916_450_102;
 
 export const POSTGRES_MIGRATIONS: readonly PostgresMigration[] = [
@@ -149,20 +158,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS llm_prompt_template_one_active_key_index
   WHERE status = 'active';
 
 CREATE TABLE IF NOT EXISTS llm_routing_revisions (
+  scope TEXT PRIMARY KEY CHECK (scope = 'player_bet'),
+  revision BIGINT NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS llm_routing_snapshots (
   scope TEXT NOT NULL CHECK (scope = 'player_bet'),
-  revision BIGINT NOT NULL CHECK (revision >= 0),
+  revision BIGINT NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991),
   snapshot JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (scope, revision)
+  PRIMARY KEY (scope, revision),
+  FOREIGN KEY (scope) REFERENCES llm_routing_revisions(scope)
 );
 
 CREATE TABLE IF NOT EXISTS llm_configuration_audit_log (
   id TEXT PRIMARY KEY,
   action TEXT NOT NULL,
   target_id TEXT NOT NULL,
-  revision BIGINT NOT NULL CHECK (revision >= 0),
+  revision BIGINT NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991),
   actor_user_id TEXT NOT NULL REFERENCES training_users(id),
-  metadata JSONB NOT NULL,
+  metadata JSONB NOT NULL CHECK (
+    jsonb_typeof(metadata) = 'object'
+    AND metadata - ARRAY['changedFields', 'reasonCode', 'sourceRevision'] = '{}'::jsonb
+  ),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -170,7 +189,20 @@ CREATE INDEX IF NOT EXISTS llm_configuration_audit_log_target_created_index
   ON llm_configuration_audit_log (target_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS llm_configuration_audit_log_actor_created_index
-  ON llm_configuration_audit_log (actor_user_id, created_at DESC);`,
+  ON llm_configuration_audit_log (actor_user_id, created_at DESC);
+
+INSERT INTO llm_routing_revisions (scope, revision)
+VALUES ('player_bet', 0)
+ON CONFLICT (scope) DO NOTHING;
+
+INSERT INTO llm_routing_snapshots (scope, revision, snapshot)
+VALUES ('player_bet', 0, jsonb_build_object(
+  'revision', 0,
+  'scope', 'player_bet',
+  'activeTemplate', NULL,
+  'routes', '[]'::jsonb
+))
+ON CONFLICT (scope, revision) DO NOTHING;`,
   },
 ];
 
@@ -178,7 +210,14 @@ CREATE INDEX IF NOT EXISTS llm_configuration_audit_log_actor_created_index
  * Runs all outstanding migrations under a transaction-scoped advisory lock.
  * Re-running is safe because applied versions are recorded transactionally.
  */
-export async function runPostgresMigrations(pool: SqlConnectionPool): Promise<void> {
+export async function runPostgresMigrations(
+  pool: SqlConnectionPool,
+  options: PostgresMigrationOptions = {},
+): Promise<void> {
+  const migrationSchema = options.migrationSchema;
+  if (migrationSchema !== undefined && !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(migrationSchema)) {
+    throw new Error("migration schema identifier is invalid");
+  }
   const client = await pool.connect();
   let transactionStarted = false;
 
@@ -186,6 +225,9 @@ export async function runPostgresMigrations(pool: SqlConnectionPool): Promise<vo
     await client.query("BEGIN");
     transactionStarted = true;
     await client.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_ADVISORY_LOCK_KEY]);
+    if (migrationSchema !== undefined) {
+      await client.query(`SET LOCAL search_path TO "${migrationSchema}", public`);
+    }
     await client.query(
       `CREATE TABLE IF NOT EXISTS schema_migrations (
   version TEXT PRIMARY KEY,

@@ -32,3 +32,22 @@ the sole owner of the HTTP listener, upgrade checks, WebSocket server, and
 shutdown ordering. Do not call `listen` from a test or attach a WebSocket
 server directly to a gateway.
 
+## Optional PostgreSQL control-plane integration test
+
+`postgres-control-plane.integration.test.ts` is deliberately opt-in. It is
+skipped unless `POSTGRES_INTEGRATION_URL` is present and is a `postgres://` or
+`postgresql://` URL, so normal server and root test commands never require a
+database or a running server. The test does not log that URL.
+
+To run it against an explicitly supplied temporary/test database:
+
+```powershell
+$env:POSTGRES_INTEGRATION_URL = 'postgresql://user:password@localhost:5432/test_database'
+pnpm --filter @mct/server test -- postgres-control-plane.integration.test.ts
+```
+
+The test creates a random, validated temporary schema, runs migrations with a
+transaction-local schema search path, and removes only that schema afterward.
+It never creates, drops, or otherwise destructively modifies a database. The
+contract verifies the revision-zero snapshot, concurrent `expectedRevision`
+behavior, and safe decoding of an audit revision returned by PostgreSQL.

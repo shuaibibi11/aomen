@@ -1,4 +1,5 @@
 import type {
+  AuditMetadata,
   AuditRecord,
   Credential,
   Endpoint,
@@ -31,22 +32,46 @@ export class LlmRoutingRevisionConflictError extends Error {
   }
 }
 
+/** The caller identity and secret-free explanation required for every effective change. */
+export interface MutationAuditContext {
+  readonly actorUserId: string;
+  readonly action: string;
+  readonly safeMetadata: AuditMetadata;
+}
+
+export interface EffectiveMutationRequest {
+  readonly expectedRevision: number;
+  readonly audit: MutationAuditContext;
+}
+
+/**
+ * A configuration change that can affect whether an existing route is
+ * executable. Repositories apply this as one transaction with its revision,
+ * immutable snapshot, and audit entry.
+ */
+export type EffectiveRoutingMutation =
+  | { readonly kind: "provider.update"; readonly provider: Provider }
+  | { readonly kind: "endpoint.update"; readonly endpoint: Endpoint }
+  | { readonly kind: "credential.enabled"; readonly credentialId: string; readonly enabled: boolean }
+  | { readonly kind: "model.update"; readonly model: Model }
+  | { readonly kind: "route.set"; readonly route: Route }
+  | { readonly kind: "template.activate"; readonly key: PromptTemplateVersion["key"]; readonly version: number };
+
 export interface LlmControlPlaneRepository {
-  upsertProvider(provider: Provider): Promise<void>;
-  upsertEndpoint(endpoint: Endpoint): Promise<void>;
-  writeEncryptedCredential(credential: Credential, ciphertext: CredentialCiphertext): Promise<void>;
-  upsertModel(model: Model): Promise<void>;
-  setRoute(route: Route, expectedRevision: number): Promise<number>;
-  saveDraftTemplate(template: PromptTemplateVersion): Promise<void>;
-  activateTemplate(
-    key: PromptTemplateVersion["key"],
-    version: number,
-    expectedRevision: number,
+  /** Creation is permitted without a revision only while the resource is unreferenced. */
+  createProvider(provider: Provider): Promise<void>;
+  createEndpoint(endpoint: Endpoint): Promise<void>;
+  createEncryptedCredential(credential: Credential, ciphertext: CredentialCiphertext): Promise<void>;
+  createModel(model: Model): Promise<void>;
+  createDraftTemplate(template: PromptTemplateVersion): Promise<void>;
+  applyEffectiveMutation(
+    mutation: EffectiveRoutingMutation,
+    request: EffectiveMutationRequest,
   ): Promise<number>;
   readRoutingSnapshot(scope: LlmRouteScope, revision?: number): Promise<RoutingSnapshot>;
+  /** Runtime-only lookup. It is never an administrator read model. */
   getCredentialCiphertextForRuntime(
     credentialId: string,
   ): Promise<ResolvedRouteSecretReference | undefined>;
-  appendAudit(auditRecord: AuditRecord): Promise<void>;
   listAudit(limit?: number): Promise<readonly AuditRecord[]>;
 }

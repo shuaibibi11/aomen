@@ -107,6 +107,27 @@ describe("PostgreSQL migrations", () => {
     expect(controlPlaneMigration?.sql).toContain("CREATE TABLE IF NOT EXISTS llm_prompt_template_versions");
     expect(controlPlaneMigration?.sql).toContain("WHERE status = 'active'");
     expect(controlPlaneMigration?.sql).toContain("CREATE TABLE IF NOT EXISTS llm_routing_revisions");
+    expect(controlPlaneMigration?.sql).toContain("scope TEXT PRIMARY KEY CHECK (scope = 'player_bet')");
+    expect(controlPlaneMigration?.sql).toContain("CREATE TABLE IF NOT EXISTS llm_routing_snapshots");
+    expect(controlPlaneMigration?.sql).toContain("INSERT INTO llm_routing_revisions (scope, revision)");
+    expect(controlPlaneMigration?.sql).toContain("INSERT INTO llm_routing_snapshots (scope, revision, snapshot)");
+    expect(controlPlaneMigration?.sql).toContain("ON CONFLICT (scope) DO NOTHING");
+    expect(controlPlaneMigration?.sql).toContain("ON CONFLICT (scope, revision) DO NOTHING");
     expect(controlPlaneMigration?.sql).toContain("CREATE TABLE IF NOT EXISTS llm_configuration_audit_log");
+    expect(controlPlaneMigration?.sql).toContain("metadata JSONB NOT NULL CHECK");
+  });
+
+  it("uses a validated quoted schema search path when requested", async () => {
+    const pool = new FakeMigrationPool();
+
+    await runPostgresMigrations(pool, { migrationSchema: "control_plane_test" });
+
+    expect(pool.client.queries).toContainEqual({
+      text: 'SET LOCAL search_path TO "control_plane_test", public',
+      values: [],
+    });
+    await expect(runPostgresMigrations(pool, { migrationSchema: "unsafe-name" })).rejects.toThrow(
+      "migration schema identifier is invalid",
+    );
   });
 });

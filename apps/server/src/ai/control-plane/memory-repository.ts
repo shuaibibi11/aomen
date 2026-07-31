@@ -13,12 +13,15 @@ import {
   type Model,
   type PromptTemplateVersion,
   type Provider,
+  type ResolvedRoute,
   type Route,
   type RoutingSnapshot,
 } from "./domain.js";
 import {
   LlmRoutingRevisionConflictError,
   type CredentialCiphertext,
+  type EffectiveMutationRequest,
+  type EffectiveRoutingMutation,
   type LlmControlPlaneRepository,
   type ResolvedRouteSecretReference,
 } from "./repository.js";
@@ -80,20 +83,26 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
     this.storeSnapshot();
   }
 
-  async upsertProvider(provider: Provider): Promise<void> {
+  async createProvider(provider: Provider): Promise<void> {
     validateProvider(provider);
     await this.serializeMutation(() => {
+      if (this.providers.has(provider.id)) {
+        throw new Error("provider identifier is immutable");
+      }
       this.providers.set(provider.id, { ...provider });
     });
   }
 
-  async upsertEndpoint(endpoint: Endpoint): Promise<void> {
+  async createEndpoint(endpoint: Endpoint): Promise<void> {
     validateEndpoint(endpoint);
     const normalizedEndpoint: Endpoint = {
       ...endpoint,
       baseUrl: this.endpointPolicy.normalizeEndpoint(endpoint.baseUrl),
     };
     await this.serializeMutation(() => {
+      if (this.endpoints.has(normalizedEndpoint.id)) {
+        throw new Error("endpoint identifier is immutable");
+      }
       const provider = this.providers.get(normalizedEndpoint.providerId);
       if (provider === undefined) {
         throw new Error("endpoint provider does not exist");
@@ -102,7 +111,7 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
     });
   }
 
-  async writeEncryptedCredential(
+  async createEncryptedCredential(
     credential: Credential,
     ciphertext: CredentialCiphertext,
   ): Promise<void> {
@@ -111,6 +120,9 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
       throw new Error("encrypted credential payload is invalid");
     }
     await this.serializeMutation(() => {
+      if (this.credentials.has(credential.id)) {
+        throw new Error("credential identifier is immutable");
+      }
       const endpoint = this.endpoints.get(credential.endpointId);
       if (endpoint === undefined || endpoint.providerId !== credential.providerId) {
         throw new Error("credential endpoint and provider relationship is invalid");
@@ -122,9 +134,12 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
     });
   }
 
-  async upsertModel(model: Model): Promise<void> {
+  async createModel(model: Model): Promise<void> {
     validateModel(model);
     await this.serializeMutation(() => {
+      if (this.models.has(model.id)) {
+        throw new Error("model identifier is immutable");
+      }
       const endpoint = this.endpoints.get(model.endpointId);
       if (endpoint === undefined || endpoint.providerId !== model.providerId) {
         throw new Error("model endpoint and provider relationship is invalid");
@@ -133,26 +148,7 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
     });
   }
 
-  async setRoute(route: Route, expectedRevision: number): Promise<number> {
-    validateRoute(route);
-    return this.serializeMutation(() => {
-      this.requireExpectedRevision(expectedRevision);
-      this.validateRouteRelationships(route);
-      for (const existingRoute of this.routes.values()) {
-        if (
-          existingRoute.id !== route.id &&
-          existingRoute.scope === route.scope &&
-          existingRoute.priority === route.priority
-        ) {
-          throw new Error("route scope and priority must be unique");
-        }
-      }
-      this.routes.set(route.id, { ...route });
-      return this.advanceRevision();
-    });
-  }
-
-  async saveDraftTemplate(template: PromptTemplateVersion): Promise<void> {
+  async createDraftTemplate(template: PromptTemplateVersion): Promise<void> {
     validatePromptTemplateVersion(template);
     if (template.status !== "draft") {
       throw new Error("only draft templates may be created");
@@ -165,27 +161,19 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
     });
   }
 
-  async activateTemplate(
-    key: PromptTemplateVersion["key"],
-    version: number,
-    expectedRevision: number,
+  async applyEffectiveMutation(
+    mutation: EffectiveRoutingMutation,
+    request: EffectiveMutationRequest,
   ): Promise<number> {
-    if (key !== "player_bet" || !Number.isSafeInteger(version) || version <= 0) {
-      throw new Error("prompt template activation request is invalid");
-    }
     return this.serializeMutation(() => {
-      this.requireExpectedRevision(expectedRevision);
-      const template = this.templates.get(version);
-      if (template === undefined || template.key !== key || template.status !== "draft") {
-        throw new Error("draft prompt template version does not exist");
-      }
-      for (const [existingVersion, existingTemplate] of this.templates) {
-        if (existingTemplate.key === key && existingTemplate.status === "active") {
-          this.templates.set(existingVersion, { ...existingTemplate, status: "archived" });
-        }
-      }
-      this.templates.set(version, { ...template, status: "active" });
-      return this.advanceRevision();
+      this.requireExpectedRevision(request.expectedRevision);
+      const nextRevision = this.currentRevision + 1;
+      const auditRecord = this.createAuditRecord(mutation, request, nextRevision);
+      this.applyMutation(mutation);
+      this.currentRevision = nextRevision;
+      this.storeSnapshot();
+      this.auditRecords.push(auditRecord);
+      return nextRevision;
     });
   }
 
@@ -220,16 +208,6 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
     };
   }
 
-  async appendAudit(auditRecord: AuditRecord): Promise<void> {
-    validateAuditRecord(auditRecord);
-    await this.serializeMutation(() => {
-      if (this.auditRecords.some((existingAudit) => existingAudit.id === auditRecord.id)) {
-        throw new Error("audit record already exists");
-      }
-      this.auditRecords.push(cloneAuditRecord(auditRecord));
-    });
-  }
-
   async listAudit(limit = 100): Promise<readonly AuditRecord[]> {
     if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 1000) {
       throw new Error("audit limit is invalid");
@@ -259,33 +237,196 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
     }
   }
 
-  private advanceRevision(): number {
-    this.currentRevision += 1;
-    this.storeSnapshot();
-    return this.currentRevision;
+  private applyMutation(mutation: EffectiveRoutingMutation): void {
+    switch (mutation.kind) {
+      case "provider.update": {
+        validateProvider(mutation.provider);
+        if (!this.providers.has(mutation.provider.id)) {
+          throw new Error("provider does not exist");
+        }
+        this.providers.set(mutation.provider.id, { ...mutation.provider });
+        return;
+      }
+      case "endpoint.update": {
+        validateEndpoint(mutation.endpoint);
+        const existingEndpoint = this.endpoints.get(mutation.endpoint.id);
+        if (existingEndpoint === undefined) {
+          throw new Error("endpoint does not exist");
+        }
+        if (existingEndpoint.providerId !== mutation.endpoint.providerId) {
+          throw new Error("endpoint provider binding is immutable");
+        }
+        this.endpoints.set(mutation.endpoint.id, {
+          ...mutation.endpoint,
+          baseUrl: this.endpointPolicy.normalizeEndpoint(mutation.endpoint.baseUrl),
+        });
+        return;
+      }
+      case "credential.enabled": {
+        const storedCredential = this.credentials.get(mutation.credentialId);
+        if (storedCredential === undefined || typeof mutation.enabled !== "boolean") {
+          throw new Error("credential does not exist or enabled status is invalid");
+        }
+        this.credentials.set(mutation.credentialId, {
+          credential: { ...storedCredential.credential, enabled: mutation.enabled },
+          ciphertext: cloneCiphertext(storedCredential.ciphertext),
+        });
+        return;
+      }
+      case "model.update": {
+        validateModel(mutation.model);
+        const existingModel = this.models.get(mutation.model.id);
+        if (existingModel === undefined) {
+          throw new Error("model does not exist");
+        }
+        if (
+          existingModel.providerId !== mutation.model.providerId ||
+          existingModel.endpointId !== mutation.model.endpointId
+        ) {
+          throw new Error("model provider and endpoint bindings are immutable");
+        }
+        this.models.set(mutation.model.id, { ...mutation.model });
+        return;
+      }
+      case "route.set": {
+        validateRoute(mutation.route);
+        this.validateRouteRelationships(mutation.route);
+        for (const existingRoute of this.routes.values()) {
+          if (
+            existingRoute.id !== mutation.route.id &&
+            existingRoute.scope === mutation.route.scope &&
+            existingRoute.priority === mutation.route.priority
+          ) {
+            throw new Error("route scope and priority must be unique");
+          }
+        }
+        this.routes.set(mutation.route.id, { ...mutation.route });
+        return;
+      }
+      case "template.activate": {
+        if (
+          mutation.key !== "player_bet" ||
+          !Number.isSafeInteger(mutation.version) ||
+          mutation.version <= 0
+        ) {
+          throw new Error("prompt template activation request is invalid");
+        }
+        const template = this.templates.get(mutation.version);
+        if (template === undefined || template.key !== mutation.key || template.status !== "draft") {
+          throw new Error("draft prompt template version does not exist");
+        }
+        for (const [existingVersion, existingTemplate] of this.templates) {
+          if (existingTemplate.key === mutation.key && existingTemplate.status === "active") {
+            this.templates.set(existingVersion, { ...existingTemplate, status: "archived" });
+          }
+        }
+        this.templates.set(mutation.version, { ...template, status: "active" });
+        return;
+      }
+    }
+  }
+
+  private createAuditRecord(
+    mutation: EffectiveRoutingMutation,
+    request: EffectiveMutationRequest,
+    revision: number,
+  ): AuditRecord {
+    const auditRecord: AuditRecord = {
+      id: `routing-audit-${revision}`,
+      action: request.audit.action,
+      targetId: this.getMutationTargetId(mutation),
+      revision,
+      actorUserId: request.audit.actorUserId,
+      metadata: request.audit.safeMetadata,
+    };
+    validateAuditRecord(auditRecord);
+    return cloneAuditRecord(auditRecord);
+  }
+
+  private getMutationTargetId(mutation: EffectiveRoutingMutation): string {
+    switch (mutation.kind) {
+      case "provider.update": return mutation.provider.id;
+      case "endpoint.update": return mutation.endpoint.id;
+      case "credential.enabled": return mutation.credentialId;
+      case "model.update": return mutation.model.id;
+      case "route.set": return mutation.route.id;
+      case "template.activate": return `${mutation.key}:${mutation.version}`;
+    }
   }
 
   private storeSnapshot(): void {
     const activeTemplate = [...this.templates.values()].find((template) => template.status === "active");
     const routes = [...this.routes.values()]
       .filter((route) => route.scope === "player_bet" && route.enabled)
-      .sort((firstRoute, secondRoute) => firstRoute.priority - secondRoute.priority)
-      .map((route) => ({ ...route }));
-    this.snapshots.set(this.currentRevision, {
+      .map((route) => this.resolveRoute(route))
+      .filter((route): route is ResolvedRoute => route !== undefined)
+      .sort((firstRoute, secondRoute) => firstRoute.priority - secondRoute.priority);
+    this.snapshots.set(this.currentRevision, this.freezeSnapshot({
       revision: this.currentRevision,
       scope: "player_bet",
-      ...(activeTemplate === undefined ? {} : { activeTemplate: { ...activeTemplate } }),
+      activeTemplate: activeTemplate === undefined
+        ? null
+        : {
+            version: activeTemplate.version,
+            checksum: activeTemplate.checksum,
+            content: activeTemplate.content,
+          },
       routes,
-    });
+    }));
   }
 
   private cloneSnapshot(snapshot: RoutingSnapshot): RoutingSnapshot {
-    return {
+    return this.freezeSnapshot({
       revision: snapshot.revision,
       scope: snapshot.scope,
-      ...(snapshot.activeTemplate === undefined ? {} : { activeTemplate: { ...snapshot.activeTemplate } }),
+      activeTemplate: snapshot.activeTemplate === null ? null : { ...snapshot.activeTemplate },
       routes: snapshot.routes.map((route) => ({ ...route })),
+    });
+  }
+
+  private resolveRoute(route: Route): ResolvedRoute | undefined {
+    const provider = this.providers.get(route.providerId);
+    const endpoint = this.endpoints.get(route.endpointId);
+    const storedCredential = this.credentials.get(route.credentialId);
+    const model = this.models.get(route.modelId);
+    if (
+      provider === undefined || !provider.enabled ||
+      endpoint === undefined || !endpoint.enabled || endpoint.providerId !== provider.id ||
+      storedCredential === undefined || !storedCredential.credential.enabled ||
+      storedCredential.credential.providerId !== provider.id || storedCredential.credential.endpointId !== endpoint.id ||
+      model === undefined || !model.enabled || model.providerId !== provider.id || model.endpointId !== endpoint.id
+    ) {
+      return undefined;
+    }
+
+    return {
+      id: route.id,
+      scope: route.scope,
+      priority: route.priority,
+      providerId: provider.id,
+      endpointId: endpoint.id,
+      modelId: model.id,
+      credentialId: storedCredential.credential.id,
+      providerKind: provider.kind,
+      endpointUrl: endpoint.baseUrl,
+      upstreamModelName: model.name,
+      credentialKeyVersion: storedCredential.credential.keyVersion,
+      attemptTimeoutMs: route.attemptTimeoutMs,
+      maxResponseBodyBytes: route.maxResponseBodyBytes,
     };
+  }
+
+  private freezeSnapshot(snapshot: RoutingSnapshot): RoutingSnapshot {
+    const frozenRoutes = snapshot.routes.map((route) => Object.freeze({ ...route }));
+    const frozenTemplate = snapshot.activeTemplate === null
+      ? null
+      : Object.freeze({ ...snapshot.activeTemplate });
+    return Object.freeze({
+      revision: snapshot.revision,
+      scope: snapshot.scope,
+      activeTemplate: frozenTemplate,
+      routes: Object.freeze(frozenRoutes),
+    });
   }
 
   private async serializeMutation<Result>(mutation: () => Result | Promise<Result>): Promise<Result> {

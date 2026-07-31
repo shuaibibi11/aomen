@@ -25,12 +25,37 @@ one template version can be active for a key. The renderer accepts only
 `publicStateJson` and `styleInstructions`; future code owns the separate strict
 JSON response contract.
 
-Routing snapshots are immutable revision records containing the active template
-and enabled ordered routes. They contain identifiers and public configuration,
-but neither plaintext credential values nor ciphertext. Administrator read
-models also exclude both plaintext and encrypted credential fields. A narrow
-future runtime-only lookup may obtain ciphertext by credential ID before using
-the AES-256-GCM service.
+Routing snapshots are deeply immutable internal runtime records. Every enabled
+route carries copied execution values: provider kind, canonical endpoint URL,
+upstream model name, credential ID and key version, timeout limits, and route
+ordering. The active template is likewise copied as its immutable version,
+checksum, and content. Snapshots contain neither plaintext credential values
+nor ciphertext. A future request must use those captured values rather than
+querying mutable provider, endpoint, or model rows while building a request.
+The sole narrow future runtime-only lookup may obtain ciphertext by the
+snapshot's credential ID before using the AES-256-GCM service; it is not an
+administrator read model.
+
+`llm_routing_revisions` has exactly one current row per scope and starts with
+the `player_bet` baseline at revision `0`. `llm_routing_snapshots` retains the
+immutable snapshot for every revision, including an empty revision-zero
+snapshot with `activeTemplate: null`. An effective mutation locks that scope
+row with `SELECT ... FOR UPDATE`, compares `expectedRevision`, applies the
+resource or route change, increments the current revision, stores the copied
+snapshot, and inserts its audit record in one database transaction. A stale
+revision and any surviving PostgreSQL unique-race path become
+`LlmRoutingRevisionConflictError`.
+
+Creating an unreferenced provider, endpoint, model, credential, or draft
+template does not advance a routing revision. Once a resource can affect a
+route, all provider, endpoint, model, credential-enabled, route, and template
+activation changes must go through `LlmControlPlaneService` with an
+`expectedRevision` and `MutationAuditContext`. Resource relationship bindings
+are validated and immutable: a route must bind a compatible enabled provider,
+endpoint, credential, and model. Credential material is never updated in
+place: rotation creates a new credential ID/key version, then a revisioned
+route switch starts using it. This prevents a request that already captured a
+snapshot from observing a changed key version.
 
 ## Endpoint and secret controls
 
@@ -47,8 +72,12 @@ check is claimed as a rebinding defense.
 
 Credential writes encrypt an API key immediately with AES-256-GCM. A 32-byte
 base64url master key, 12-byte nonce, and AAD binding credential ID, provider ID,
-and key version are required. Audit records use a fixed allowlisted metadata
-shape and reject secret-like names or values.
+and key version are required. Every effective mutation writes its audit record
+inside the same transaction as its data, revision, and snapshot; no optional
+later append can omit it. Metadata has a fixed allowlisted shape, rejects
+secret-like names or values, and audit queries select no credential cipher or
+secret fields. PostgreSQL `BIGINT` revisions are accepted only when they fit a
+JavaScript safe integer before they enter the domain model.
 
 ## Future failure boundary
 
