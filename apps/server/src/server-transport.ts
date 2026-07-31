@@ -77,6 +77,11 @@ export class ServerTransport {
     return this.getAddress().port;
   }
 
+  /** Return the gateway managed by this transport without exposing a listener. */
+  getGateway(): WsGateway {
+    return this.gateway;
+  }
+
   /** Exposes only the TCP listener address needed by host integration checks. */
   getAddress(): AddressInfo {
     const address = this.httpServer.address();

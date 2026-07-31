@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import {
+  createTestServerTransport,
   MemoryEventStore,
   RoomManager,
-  ServerTransport,
 } from "@mct/server/testing";
 import { RoomConnection, type WebSocketFactory, type WebSocketLike } from "@mct/room-client";
 import { asActorId, asTableId, SYSTEM_DEALER } from "@mct/shared";
@@ -27,10 +27,10 @@ const rulePack: RulePack = {
   chipset: { currency: "HKD", denominations: [100] },
 };
 
-const openTransports: ServerTransport[] = [];
+const openTestServers: Array<{ readonly close: () => Promise<void> }> = [];
 
 afterEach(async () => {
-  await Promise.all(openTransports.splice(0).map((transport) => transport.close()));
+  await Promise.all(openTestServers.splice(0).map((testServer) => testServer.close()));
 });
 
 describe("RemoteTableSession integration", () => {
@@ -46,24 +46,17 @@ describe("RemoteTableSession integration", () => {
       shoeSeed: "remote-integration-seed",
     });
     room.submitIntent({ type: "start_round", actorId: SYSTEM_DEALER });
-    const transport = new ServerTransport({
-      port: 0,
-      host: "127.0.0.1",
+    const testServer = await createTestServerTransport({
       roomManager,
-      allowedOrigin: undefined,
-      maximumPayloadBytes: 65_536,
-      isReady: () => true,
-      onError: () => undefined,
     });
-    openTransports.push(transport);
-    await transport.waitUntilListening();
+    openTestServers.push(testServer);
     const websocketFactory: WebSocketFactory = {
       create(url) {
         return new WebSocket(url) as unknown as WebSocketLike;
       },
     };
     const connection = new RoomConnection({
-      url: `ws://127.0.0.1:${transport.getPort()}/ws`,
+      url: `ws://127.0.0.1:${testServer.port}/ws`,
       tableId,
       actorId,
       credential,

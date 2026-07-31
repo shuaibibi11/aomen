@@ -24,21 +24,36 @@ describe("resolveServerNetworkConfig", () => {
     },
   );
 
-  it.each(["127.0.0.1", "::1", "localhost"])(
+  it.each(["127.0.0.1", "::1"])(
     "accepts the explicit loopback host %s",
     (host) => {
       expect(resolveServerNetworkConfig({ BIND_HOST: host }).host).toBe(host);
     },
   );
 
-  it.each(["", " ", "0.0.0.0", "::", "192.168.1.10", "localhost "])(
+  it.each(["", " ", "0.0.0.0", "::", "192.168.1.10", "localhost", "localhost "])(
     "rejects non-loopback bind host %j",
     (host) => {
       expect(() => resolveServerNetworkConfig({ BIND_HOST: host })).toThrow(
-        "BIND_HOST must be one of 127.0.0.1, ::1, or localhost",
+        "BIND_HOST must be one of 127.0.0.1 or ::1",
       );
     },
   );
+
+  it("does not echo a rejected bind host in its error", () => {
+    const rejectedHost = "loopback-secret.example";
+    const resolveRejectedConfig = () =>
+      resolveServerNetworkConfig({ BIND_HOST: rejectedHost });
+
+    expect(resolveRejectedConfig).toThrow(
+      "BIND_HOST must be one of 127.0.0.1 or ::1",
+    );
+    try {
+      resolveRejectedConfig();
+    } catch (error) {
+      expect(String(error)).not.toContain(rejectedHost);
+    }
+  });
 
   it("accepts a concrete canonical HTTPS origin", () => {
     expect(

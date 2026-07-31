@@ -14,7 +14,7 @@ export interface ServerNetworkEnvironment {
 
 export interface ServerNetworkConfig {
   readonly port: number;
-  readonly host: "127.0.0.1" | "::1" | "localhost";
+  readonly host: "127.0.0.1" | "::1";
   readonly allowedOrigin: string | undefined;
   readonly maximumPayloadBytes: number;
   readonly perMessageDeflate: false;
@@ -23,7 +23,6 @@ export interface ServerNetworkConfig {
 const ALLOWED_BIND_HOSTS = new Set<ServerNetworkConfig["host"]>([
   "127.0.0.1",
   "::1",
-  "localhost",
 ]);
 
 function parseBoundedInteger(
@@ -58,7 +57,7 @@ function resolveBindHost(value: string | undefined): ServerNetworkConfig["host"]
     return DEFAULT_BIND_HOST;
   }
   if (!ALLOWED_BIND_HOSTS.has(value as ServerNetworkConfig["host"])) {
-    throw new Error("BIND_HOST must be one of 127.0.0.1, ::1, or localhost");
+    throw new Error("BIND_HOST must be one of 127.0.0.1 or ::1");
   }
   return value as ServerNetworkConfig["host"];
 }

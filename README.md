@@ -115,7 +115,10 @@ pnpm --filter @mct/server start
 The server owns one cleartext Node HTTP listener for `/livez`, `/healthz`, and
 the exact WebSocket upgrade endpoint `/ws`. It is intentionally a loopback
 listener, not an Internet-facing TLS endpoint. `BIND_HOST` defaults to the
-exact value `127.0.0.1` and only accepts `127.0.0.1`, `::1`, or `localhost`.
+exact value `127.0.0.1` and only accepts the numeric loopback values
+`127.0.0.1` and `::1`; `localhost` is deliberately rejected. Staging without a
+domain must bind the Node process to `127.0.0.1` and let Nginx own the external
+address.
 Do not use a direct public IP or expose `ws://` / `http://` traffic without TLS.
 
 Staging remote sessions require Nginx to terminate TLS with an internal-CA
@@ -139,6 +142,32 @@ local development and test use, where the documented loopback `ws://` endpoint
 may be used directly. There is no wildcard CORS response. This slice only
 establishes the secure host boundary; it does not add cookie authentication or
 an administrative REST API.
+
+### Server testing migration API
+
+The `@mct/server/testing` export keeps `WsGateway` free of listener ownership.
+New integration tests should use `createTestServerTransport` instead of
+creating an HTTP server or a `WebSocketServer` beside the gateway:
+
+```ts
+import {
+  createTestServerTransport,
+  MemoryEventStore,
+  RoomManager,
+} from "@mct/server/testing";
+
+const testServer = await createTestServerTransport({
+  roomManager: new RoomManager(new MemoryEventStore()),
+});
+const websocketUrl = `ws://127.0.0.1:${testServer.port}/ws`;
+
+// Use testServer.gateway for gateway assertions and close the whole boundary.
+await testServer.close();
+```
+
+The helper waits for the shared `ServerTransport` listener, returns its bound
+port and gateway, and provides an idempotent `close` lifecycle. It never
+reintroduces a `WsGateway` port option or a public gateway `listen` API.
 
 ### Server-only LLM decision configuration
 
@@ -221,6 +250,7 @@ connect directly to the loopback server.
 - [Phase 0-1 实现计划](docs/superpowers/plans/2026-07-27-macau-casino-training-phase0-1.md)
 - [当前进度与提交基线](docs/development/current-progress.md)
 - [2026-07-30 本地验收记录（非 CI）](docs/development/validation-2026-07-29.md)
+- [Server testing boundary](docs/development/server-testing.md)
 - [对局架构说明](docs/architecture/game-architecture.md)
 - [百家乐新手训练指南](docs/guides/baccarat-beginner-guide.md)
 - [Git 与外部 worktree 工作流](docs/development/git-workflow.md)
