@@ -5,6 +5,15 @@ export interface PostgresMigration {
   readonly sql: string;
 }
 
+export interface PostgresMigrationOptions {
+  /**
+   * An optional isolated schema for tests. The identifier is validated before
+   * interpolation and the transaction-local search path keeps all migration
+   * SQL scoped to that schema.
+   */
+  readonly migrationSchema?: string;
+}
+
 const MIGRATION_ADVISORY_LOCK_KEY = 916_450_102;
 
 export const POSTGRES_MIGRATIONS: readonly PostgresMigration[] = [
@@ -62,13 +71,153 @@ CREATE TABLE IF NOT EXISTS table_events (
   PRIMARY KEY (table_id, seq)
 );`,
   },
+  {
+    version: "002_llm_control_plane",
+    sql: `CREATE TABLE IF NOT EXISTS llm_providers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('openai_compatible', 'anthropic_messages', 'gemini_generate_content')),
+  enabled BOOLEAN NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS llm_endpoints (
+  id TEXT PRIMARY KEY,
+  provider_id TEXT NOT NULL REFERENCES llm_providers(id),
+  base_url TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (id, provider_id)
+);
+
+CREATE TABLE IF NOT EXISTS llm_credentials (
+  id TEXT PRIMARY KEY,
+  provider_id TEXT NOT NULL REFERENCES llm_providers(id),
+  endpoint_id TEXT NOT NULL,
+  key_version INTEGER NOT NULL CHECK (key_version > 0),
+  enabled BOOLEAN NOT NULL,
+  nonce BYTEA NOT NULL CHECK (octet_length(nonce) = 12),
+  ciphertext BYTEA NOT NULL,
+  auth_tag BYTEA NOT NULL CHECK (octet_length(auth_tag) = 16),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (endpoint_id, provider_id) REFERENCES llm_endpoints(id, provider_id),
+  UNIQUE (id, provider_id, endpoint_id)
+);
+
+CREATE TABLE IF NOT EXISTS llm_models (
+  id TEXT PRIMARY KEY,
+  provider_id TEXT NOT NULL REFERENCES llm_providers(id),
+  endpoint_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (endpoint_id, provider_id) REFERENCES llm_endpoints(id, provider_id),
+  UNIQUE (id, provider_id, endpoint_id)
+);
+
+CREATE TABLE IF NOT EXISTS llm_routes (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL CHECK (scope = 'player_bet'),
+  priority INTEGER NOT NULL CHECK (priority > 0),
+  provider_id TEXT NOT NULL REFERENCES llm_providers(id),
+  endpoint_id TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL,
+  attempt_timeout_ms INTEGER NOT NULL CHECK (attempt_timeout_ms BETWEEN 1 AND 30000),
+  max_response_body_bytes INTEGER NOT NULL CHECK (max_response_body_bytes BETWEEN 1024 AND 1048576),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (endpoint_id, provider_id) REFERENCES llm_endpoints(id, provider_id),
+  FOREIGN KEY (credential_id, provider_id, endpoint_id) REFERENCES llm_credentials(id, provider_id, endpoint_id),
+  FOREIGN KEY (model_id, provider_id, endpoint_id) REFERENCES llm_models(id, provider_id, endpoint_id),
+  UNIQUE (scope, priority)
+);
+
+CREATE INDEX IF NOT EXISTS llm_routes_enabled_priority_index
+  ON llm_routes (scope, priority)
+  WHERE enabled = TRUE;
+
+CREATE TABLE IF NOT EXISTS llm_prompt_template_versions (
+  id TEXT PRIMARY KEY,
+  key TEXT NOT NULL CHECK (key = 'player_bet'),
+  version INTEGER NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL CHECK (status IN ('draft', 'active', 'archived')),
+  content TEXT NOT NULL CHECK (octet_length(content) <= 65536),
+  checksum CHAR(64) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (key, version)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS llm_prompt_template_one_active_key_index
+  ON llm_prompt_template_versions (key)
+  WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS llm_routing_revisions (
+  scope TEXT PRIMARY KEY CHECK (scope = 'player_bet'),
+  revision BIGINT NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS llm_routing_snapshots (
+  scope TEXT NOT NULL CHECK (scope = 'player_bet'),
+  revision BIGINT NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991),
+  snapshot JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (scope, revision),
+  FOREIGN KEY (scope) REFERENCES llm_routing_revisions(scope)
+);
+
+CREATE TABLE IF NOT EXISTS llm_configuration_audit_log (
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  revision BIGINT NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991),
+  actor_user_id TEXT NOT NULL REFERENCES training_users(id),
+  metadata JSONB NOT NULL CHECK (
+    jsonb_typeof(metadata) = 'object'
+    AND metadata - ARRAY['changedFields', 'reasonCode', 'sourceRevision'] = '{}'::jsonb
+  ),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS llm_configuration_audit_log_target_created_index
+  ON llm_configuration_audit_log (target_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS llm_configuration_audit_log_actor_created_index
+  ON llm_configuration_audit_log (actor_user_id, created_at DESC);
+
+INSERT INTO llm_routing_revisions (scope, revision)
+VALUES ('player_bet', 0)
+ON CONFLICT (scope) DO NOTHING;
+
+INSERT INTO llm_routing_snapshots (scope, revision, snapshot)
+VALUES ('player_bet', 0, jsonb_build_object(
+  'revision', 0,
+  'scope', 'player_bet',
+  'activeTemplate', NULL,
+  'routes', '[]'::jsonb
+))
+ON CONFLICT (scope, revision) DO NOTHING;`,
+  },
 ];
 
 /**
  * Runs all outstanding migrations under a transaction-scoped advisory lock.
  * Re-running is safe because applied versions are recorded transactionally.
  */
-export async function runPostgresMigrations(pool: SqlConnectionPool): Promise<void> {
+export async function runPostgresMigrations(
+  pool: SqlConnectionPool,
+  options: PostgresMigrationOptions = {},
+): Promise<void> {
+  const migrationSchema = options.migrationSchema;
+  if (migrationSchema !== undefined && !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(migrationSchema)) {
+    throw new Error("migration schema identifier is invalid");
+  }
   const client = await pool.connect();
   let transactionStarted = false;
 
@@ -76,6 +225,9 @@ export async function runPostgresMigrations(pool: SqlConnectionPool): Promise<vo
     await client.query("BEGIN");
     transactionStarted = true;
     await client.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_ADVISORY_LOCK_KEY]);
+    if (migrationSchema !== undefined) {
+      await client.query(`SET LOCAL search_path TO "${migrationSchema}", public`);
+    }
     await client.query(
       `CREATE TABLE IF NOT EXISTS schema_migrations (
   version TEXT PRIMARY KEY,
