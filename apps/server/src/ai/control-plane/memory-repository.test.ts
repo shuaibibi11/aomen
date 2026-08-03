@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { MemoryLlmControlPlaneRepository } from "./memory-repository.js";
-import type { Endpoint, Model, Provider, Route } from "./domain.js";
+import {
+  validateCredential,
+  validateEndpoint,
+  validateModel,
+  validateProvider,
+  validateRoute,
+  type Endpoint,
+  type Model,
+  type Provider,
+  type Route,
+} from "./domain.js";
 import { calculatePromptTemplateChecksum } from "./template.js";
 import type { EffectiveMutationRequest } from "./repository.js";
 import { LlmControlPlaneService } from "./service.js";
@@ -30,6 +40,14 @@ async function seed(service: LlmControlPlaneService): Promise<void> {
 }
 
 describe("MemoryLlmControlPlaneRepository", () => {
+  it("rejects non-boolean enabled values for every routable resource", () => {
+    expect(() => validateProvider({ ...provider, enabled: "false" as never })).toThrow();
+    expect(() => validateEndpoint({ ...endpoint, enabled: 1 as never })).toThrow();
+    expect(() => validateCredential({ ...credential, enabled: null as never })).toThrow();
+    expect(() => validateModel({ ...model, enabled: {} as never })).toThrow();
+    expect(() => validateRoute({ ...route, enabled: [] as never })).toThrow();
+  });
+
   it("enforces relationships, disabled resources, route ordering, and secret-free snapshots", async () => {
     const repository = new MemoryLlmControlPlaneRepository();
     const service = new LlmControlPlaneService(repository);
@@ -110,6 +128,95 @@ describe("MemoryLlmControlPlaneRepository", () => {
     await expect(repository.listAudit()).resolves.toEqual([
       expect.objectContaining({ metadata: { changedFields: ["priority"] } }),
     ]);
+  });
+
+  it("captures resource creation inputs before the serialization queue yields", async () => {
+    const repository = new MemoryLlmControlPlaneRepository();
+    const service = new LlmControlPlaneService(repository);
+    const mutableProvider = { ...provider };
+    const mutableEndpoint = { ...endpoint };
+    const mutableModel = { ...model };
+
+    const providerPromise = repository.createProvider(mutableProvider);
+    mutableProvider.enabled = false;
+    await providerPromise;
+
+    const endpointPromise = repository.createEndpoint(mutableEndpoint);
+    mutableEndpoint.enabled = false;
+    await endpointPromise;
+
+    const modelPromise = repository.createModel(mutableModel);
+    mutableModel.enabled = false;
+    await modelPromise;
+
+    await repository.createEncryptedCredential(
+      credential,
+      { nonce: Buffer.alloc(12), ciphertext: Buffer.from("cipher"), authTag: Buffer.alloc(16) },
+    );
+    await expect(service.setRoute(route, mutationRequest(0, "route.created"))).resolves.toBe(1);
+  });
+
+  it("copies encrypted credential buffers before the serialization queue yields", async () => {
+    const repository = new MemoryLlmControlPlaneRepository();
+    const service = new LlmControlPlaneService(repository);
+    await service.createProvider(provider);
+    await service.createEndpoint(endpoint);
+    const encryptedCredential = {
+      nonce: Buffer.alloc(12),
+      ciphertext: Buffer.from("cipher"),
+      authTag: Buffer.alloc(16),
+    };
+
+    const credentialPromise = repository.createEncryptedCredential(credential, encryptedCredential);
+    encryptedCredential.ciphertext.fill(0);
+    await credentialPromise;
+
+    const storedCredential = await repository.getCredentialCiphertextForRuntime(credential.id);
+    expect(storedCredential?.ciphertext.ciphertext.toString()).toBe("cipher");
+  });
+
+  it("captures effective mutation targets before the serialization queue yields", async () => {
+    const repository = new MemoryLlmControlPlaneRepository();
+    const service = new LlmControlPlaneService(repository);
+    await seed(service);
+    const mutableRoute = { ...route };
+
+    const mutationPromise = repository.applyEffectiveMutation(
+      { kind: "route.set", route: mutableRoute },
+      mutationRequest(0, "route.created"),
+    );
+    mutableRoute.id = "mutated-route";
+    await mutationPromise;
+
+    await expect(repository.readRoutingSnapshot("player_bet")).resolves.toEqual(
+      expect.objectContaining({
+        routes: [expect.objectContaining({ id: route.id })],
+      }),
+    );
+    await expect(repository.listAudit()).resolves.toEqual([
+      expect.objectContaining({ targetId: route.id }),
+    ]);
+  });
+
+  it("captures draft template input before the serialization queue yields", async () => {
+    const repository = new MemoryLlmControlPlaneRepository();
+    const service = new LlmControlPlaneService(repository);
+    const content = "{{publicStateJson}}";
+    const mutableTemplate = {
+      id: "template-1",
+      key: "player_bet" as const,
+      version: 1,
+      status: "draft" as const,
+      content,
+      checksum: calculatePromptTemplateChecksum(content),
+    };
+
+    const templatePromise = repository.createDraftTemplate(mutableTemplate);
+    (mutableTemplate as { status: "draft" | "active" }).status = "active";
+    await templatePromise;
+
+    await expect(service.activateTemplate("player_bet", 1, mutationRequest(0, "template.activated")))
+      .resolves.toBe(1);
   });
 
   it("activates one immutable template per revision and preserves old snapshots", async () => {

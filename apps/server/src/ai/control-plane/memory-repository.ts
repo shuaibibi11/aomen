@@ -1,8 +1,10 @@
 import {
-  normalizeAuditMetadata,
+  normalizeCredential,
+  normalizeEndpoint,
+  normalizeModel,
+  normalizeProvider,
   requireNonEmptyIdentifier,
   validateAuditRecord,
-  validateCredential,
   validateEndpoint,
   validateModel,
   validateProvider,
@@ -20,6 +22,8 @@ import {
 } from "./domain.js";
 import {
   LlmRoutingRevisionConflictError,
+  normalizeEffectiveMutationRequest,
+  normalizeEffectiveRoutingMutation,
   type CredentialCiphertext,
   type EffectiveMutationRequest,
   type EffectiveRoutingMutation,
@@ -27,7 +31,7 @@ import {
   type ResolvedRouteSecretReference,
 } from "./repository.js";
 import { LlmEndpointPolicy } from "./endpoint-policy.js";
-import { validatePromptTemplateVersion } from "./template.js";
+import { normalizePromptTemplateVersion } from "./template.js";
 
 interface StoredCredential {
   readonly credential: Credential;
@@ -85,21 +89,21 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
   }
 
   async createProvider(provider: Provider): Promise<void> {
-    validateProvider(provider);
+    const normalizedProvider = normalizeProvider(provider);
     await this.serializeMutation(() => {
-      if (this.providers.has(provider.id)) {
+      if (this.providers.has(normalizedProvider.id)) {
         throw new Error("provider identifier is immutable");
       }
-      this.providers.set(provider.id, { ...provider });
+      this.providers.set(normalizedProvider.id, normalizedProvider);
     });
   }
 
   async createEndpoint(endpoint: Endpoint): Promise<void> {
-    validateEndpoint(endpoint);
-    const normalizedEndpoint: Endpoint = {
-      ...endpoint,
-      baseUrl: this.endpointPolicy.normalizeEndpoint(endpoint.baseUrl),
-    };
+    const validatedEndpoint = normalizeEndpoint(endpoint);
+    const normalizedEndpoint = Object.freeze({
+      ...validatedEndpoint,
+      baseUrl: this.endpointPolicy.normalizeEndpoint(validatedEndpoint.baseUrl),
+    });
     await this.serializeMutation(() => {
       if (this.endpoints.has(normalizedEndpoint.id)) {
         throw new Error("endpoint identifier is immutable");
@@ -116,49 +120,50 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
     credential: Credential,
     ciphertext: CredentialCiphertext,
   ): Promise<void> {
-    validateCredential(credential);
+    const normalizedCredential = normalizeCredential(credential);
     if (ciphertext.nonce.length !== 12 || ciphertext.authTag.length !== 16 || ciphertext.ciphertext.length === 0) {
       throw new Error("encrypted credential payload is invalid");
     }
+    const normalizedCiphertext = cloneCiphertext(ciphertext);
     await this.serializeMutation(() => {
-      if (this.credentials.has(credential.id)) {
+      if (this.credentials.has(normalizedCredential.id)) {
         throw new Error("credential identifier is immutable");
       }
-      const endpoint = this.endpoints.get(credential.endpointId);
-      if (endpoint === undefined || endpoint.providerId !== credential.providerId) {
+      const endpoint = this.endpoints.get(normalizedCredential.endpointId);
+      if (endpoint === undefined || endpoint.providerId !== normalizedCredential.providerId) {
         throw new Error("credential endpoint and provider relationship is invalid");
       }
-      this.credentials.set(credential.id, {
-        credential: { ...credential },
-        ciphertext: cloneCiphertext(ciphertext),
+      this.credentials.set(normalizedCredential.id, {
+        credential: normalizedCredential,
+        ciphertext: normalizedCiphertext,
       });
     });
   }
 
   async createModel(model: Model): Promise<void> {
-    validateModel(model);
+    const normalizedModel = normalizeModel(model);
     await this.serializeMutation(() => {
-      if (this.models.has(model.id)) {
+      if (this.models.has(normalizedModel.id)) {
         throw new Error("model identifier is immutable");
       }
-      const endpoint = this.endpoints.get(model.endpointId);
-      if (endpoint === undefined || endpoint.providerId !== model.providerId) {
+      const endpoint = this.endpoints.get(normalizedModel.endpointId);
+      if (endpoint === undefined || endpoint.providerId !== normalizedModel.providerId) {
         throw new Error("model endpoint and provider relationship is invalid");
       }
-      this.models.set(model.id, { ...model });
+      this.models.set(normalizedModel.id, normalizedModel);
     });
   }
 
   async createDraftTemplate(template: PromptTemplateVersion): Promise<void> {
-    validatePromptTemplateVersion(template);
-    if (template.status !== "draft") {
+    const normalizedTemplate = normalizePromptTemplateVersion(template);
+    if (normalizedTemplate.status !== "draft") {
       throw new Error("only draft templates may be created");
     }
     await this.serializeMutation(() => {
-      if (this.templates.has(template.version)) {
+      if (this.templates.has(normalizedTemplate.version)) {
         throw new Error("prompt template version is immutable and already exists");
       }
-      this.templates.set(template.version, { ...template });
+      this.templates.set(normalizedTemplate.version, normalizedTemplate);
     });
   }
 
@@ -166,18 +171,19 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
     mutation: EffectiveRoutingMutation,
     request: EffectiveMutationRequest,
   ): Promise<number> {
-    // This copies caller-owned metadata before serializeMutation yields to an
-    // earlier mutation. A queued audit must not observe a later caller change.
-    const normalizedRequest = this.normalizeEffectiveMutationRequest(request);
+    // Capture every caller-owned command field before serializeMutation yields
+    // to an earlier operation in the in-memory transaction queue.
+    const normalizedMutation = normalizeEffectiveRoutingMutation(mutation);
+    const normalizedRequest = normalizeEffectiveMutationRequest(request);
     return this.serializeMutation(() => {
       this.requireExpectedRevision(normalizedRequest.expectedRevision);
       const nextRevision = this.currentRevision + 1;
       const auditRecord = this.createAuditRecord(
-        mutation,
+        normalizedMutation,
         normalizedRequest,
         nextRevision,
       );
-      this.applyMutation(mutation);
+      this.applyMutation(normalizedMutation);
       this.currentRevision = nextRevision;
       this.storeSnapshot();
       this.auditRecords.push(auditRecord);
@@ -349,19 +355,6 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
     };
     validateAuditRecord(auditRecord);
     return cloneAuditRecord(auditRecord);
-  }
-
-  private normalizeEffectiveMutationRequest(
-    request: EffectiveMutationRequest,
-  ): EffectiveMutationRequest {
-    return Object.freeze({
-      expectedRevision: request.expectedRevision,
-      audit: Object.freeze({
-        actorUserId: request.audit.actorUserId,
-        action: request.audit.action,
-        safeMetadata: normalizeAuditMetadata(request.audit.safeMetadata),
-      }),
-    });
   }
 
   private getMutationTargetId(mutation: EffectiveRoutingMutation): string {

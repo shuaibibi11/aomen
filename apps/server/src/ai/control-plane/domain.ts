@@ -141,20 +141,51 @@ function requirePositiveSafeInteger(value: number, fieldName: string): number {
   return value;
 }
 
+function requireBoolean(value: unknown, fieldName: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`${fieldName} must be a boolean`);
+  }
+  return value;
+}
+
 export function validateProvider(provider: Provider): Provider {
   requireNonEmptyIdentifier(provider.id, "provider.id");
   requireNonEmptyIdentifier(provider.name, "provider.name");
   if (!PROVIDER_KINDS.has(provider.kind)) {
     throw new Error("provider.kind is invalid");
   }
+  requireBoolean(provider.enabled, "provider.enabled");
   return provider;
+}
+
+/** Validates and detaches a provider before asynchronous persistence begins. */
+export function normalizeProvider(provider: Provider): Provider {
+  validateProvider(provider);
+  return Object.freeze({
+    id: provider.id,
+    name: provider.name,
+    kind: provider.kind,
+    enabled: provider.enabled,
+  });
 }
 
 export function validateEndpoint(endpoint: Endpoint): Endpoint {
   requireNonEmptyIdentifier(endpoint.id, "endpoint.id");
   requireNonEmptyIdentifier(endpoint.providerId, "endpoint.providerId");
   requireNonEmptyIdentifier(endpoint.baseUrl, "endpoint.baseUrl");
+  requireBoolean(endpoint.enabled, "endpoint.enabled");
   return endpoint;
+}
+
+/** Validates and detaches an endpoint before asynchronous persistence begins. */
+export function normalizeEndpoint(endpoint: Endpoint): Endpoint {
+  validateEndpoint(endpoint);
+  return Object.freeze({
+    id: endpoint.id,
+    providerId: endpoint.providerId,
+    baseUrl: endpoint.baseUrl,
+    enabled: endpoint.enabled,
+  });
 }
 
 export function validateCredential(credential: Credential): Credential {
@@ -162,7 +193,20 @@ export function validateCredential(credential: Credential): Credential {
   requireNonEmptyIdentifier(credential.providerId, "credential.providerId");
   requireNonEmptyIdentifier(credential.endpointId, "credential.endpointId");
   requirePositiveSafeInteger(credential.keyVersion, "credential.keyVersion");
+  requireBoolean(credential.enabled, "credential.enabled");
   return credential;
+}
+
+/** Validates and detaches a credential projection before asynchronous persistence begins. */
+export function normalizeCredential(credential: Credential): Credential {
+  validateCredential(credential);
+  return Object.freeze({
+    id: credential.id,
+    providerId: credential.providerId,
+    endpointId: credential.endpointId,
+    keyVersion: credential.keyVersion,
+    enabled: credential.enabled,
+  });
 }
 
 export function validateModel(model: Model): Model {
@@ -170,7 +214,20 @@ export function validateModel(model: Model): Model {
   requireNonEmptyIdentifier(model.providerId, "model.providerId");
   requireNonEmptyIdentifier(model.endpointId, "model.endpointId");
   requireNonEmptyIdentifier(model.name, "model.name");
+  requireBoolean(model.enabled, "model.enabled");
   return model;
+}
+
+/** Validates and detaches a model before asynchronous persistence begins. */
+export function normalizeModel(model: Model): Model {
+  validateModel(model);
+  return Object.freeze({
+    id: model.id,
+    providerId: model.providerId,
+    endpointId: model.endpointId,
+    name: model.name,
+    enabled: model.enabled,
+  });
 }
 
 /** Validates route-local invariants; repositories validate linked resources. */
@@ -181,6 +238,7 @@ export function validateRoute(route: Route): Route {
   requireNonEmptyIdentifier(route.credentialId, "route.credentialId");
   requireNonEmptyIdentifier(route.modelId, "route.modelId");
   requirePositiveSafeInteger(route.priority, "route.priority");
+  requireBoolean(route.enabled, "route.enabled");
   if (route.scope !== "player_bet") {
     throw new Error("route.scope is invalid");
   }
@@ -199,6 +257,23 @@ export function validateRoute(route: Route): Route {
     throw new Error("route.maxResponseBodyBytes is outside the safe range");
   }
   return route;
+}
+
+/** Validates and detaches a route before asynchronous persistence begins. */
+export function normalizeRoute(route: Route): Route {
+  validateRoute(route);
+  return Object.freeze({
+    id: route.id,
+    scope: route.scope,
+    priority: route.priority,
+    providerId: route.providerId,
+    endpointId: route.endpointId,
+    credentialId: route.credentialId,
+    modelId: route.modelId,
+    enabled: route.enabled,
+    attemptTimeoutMs: route.attemptTimeoutMs,
+    maxResponseBodyBytes: route.maxResponseBodyBytes,
+  });
 }
 
 export function validateAuditRecord(auditRecord: AuditRecord): AuditRecord {

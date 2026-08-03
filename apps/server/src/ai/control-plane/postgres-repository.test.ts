@@ -151,6 +151,79 @@ describe("PostgresLlmControlPlaneRepository", () => {
     expect(auditInsert?.values[5]).toBe(JSON.stringify({ changedFields: ["priority"] }));
   });
 
+  it("captures effective route input before waiting for a database connection", async () => {
+    const pool = new GatedFakePool();
+    const repository = new PostgresLlmControlPlaneRepository(pool);
+    const mutableRoute = { ...route };
+
+    const mutationPromise = repository.applyEffectiveMutation(
+      { kind: "route.set", route: mutableRoute },
+      mutationRequest,
+    );
+    await pool.connectionStarted;
+    mutableRoute.id = "mutated-route";
+    pool.releaseConnection();
+    await mutationPromise;
+
+    const routeInsert = pool.client.queries.find((query) =>
+      query.text.startsWith("INSERT INTO llm_routes"),
+    );
+    const auditInsert = pool.client.queries.find((query) =>
+      query.text.includes("llm_configuration_audit_log"),
+    );
+    expect(routeInsert?.values[0]).toBe(route.id);
+    expect(auditInsert?.values[2]).toBe(route.id);
+  });
+
+  it("captures template activation input before waiting for a database connection", async () => {
+    const pool = new GatedFakePool();
+    const repository = new PostgresLlmControlPlaneRepository(pool);
+    const mutableMutation = {
+      kind: "template.activate" as const,
+      key: "player_bet" as const,
+      version: 1,
+    };
+
+    const mutationPromise = repository.applyEffectiveMutation(mutableMutation, mutationRequest);
+    await pool.connectionStarted;
+    mutableMutation.version = 2;
+    pool.releaseConnection();
+    await mutationPromise;
+
+    const templateActivation = pool.client.queries.find((query) =>
+      query.text.includes("SET status = 'active'"),
+    );
+    expect(templateActivation?.values).toEqual(["player_bet", 1]);
+  });
+
+  it("copies credential buffers before passing them to the database client", async () => {
+    const pool = new FakePool();
+    const repository = new PostgresLlmControlPlaneRepository(pool);
+    const mutableCiphertext = {
+      nonce: Buffer.alloc(12),
+      ciphertext: Buffer.from("cipher"),
+      authTag: Buffer.alloc(16),
+    };
+
+    const creationPromise = repository.createEncryptedCredential(
+      {
+        id: "credential-1",
+        providerId: "provider-1",
+        endpointId: "endpoint-1",
+        keyVersion: 1,
+        enabled: true,
+      },
+      mutableCiphertext,
+    );
+    mutableCiphertext.ciphertext.fill(0);
+    await creationPromise;
+
+    const credentialInsert = pool.client.queries.find((query) =>
+      query.text.startsWith("INSERT INTO llm_credentials"),
+    );
+    expect((credentialInsert?.values[6] as Buffer).toString()).toBe("cipher");
+  });
+
   it("decodes audit BIGINT strings only when they are safe integers", async () => {
     const pool = new FakePool();
     pool.query = async () => ({

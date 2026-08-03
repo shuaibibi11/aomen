@@ -54,6 +54,21 @@ export function validatePromptTemplateVersion(template: PromptTemplateVersion): 
   return template;
 }
 
+/** Validates and detaches an immutable draft template before asynchronous persistence begins. */
+export function normalizePromptTemplateVersion(
+  template: PromptTemplateVersion,
+): PromptTemplateVersion {
+  validatePromptTemplateVersion(template);
+  return Object.freeze({
+    id: template.id,
+    key: template.key,
+    version: template.version,
+    status: template.status,
+    content: template.content,
+    checksum: template.checksum,
+  });
+}
+
 /** Renders only explicit public input; no identity, hidden state, or overrides are accepted. */
 export function renderPromptTemplate(
   template: PromptTemplateVersion,

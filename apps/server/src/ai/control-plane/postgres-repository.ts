@@ -1,8 +1,10 @@
 import {
+  normalizeCredential,
+  normalizeEndpoint,
+  normalizeModel,
+  normalizeProvider,
   requireNonEmptyIdentifier,
-  normalizeAuditMetadata,
   validateAuditRecord,
-  validateCredential,
   validateEndpoint,
   validateModel,
   validateProvider,
@@ -18,6 +20,8 @@ import {
 } from "./domain.js";
 import {
   LlmRoutingRevisionConflictError,
+  normalizeEffectiveMutationRequest,
+  normalizeEffectiveRoutingMutation,
   type CredentialCiphertext,
   type EffectiveMutationRequest,
   type EffectiveRoutingMutation,
@@ -25,7 +29,7 @@ import {
   type ResolvedRouteSecretReference,
 } from "./repository.js";
 import { LlmEndpointPolicy } from "./endpoint-policy.js";
-import { validatePromptTemplateVersion } from "./template.js";
+import { normalizePromptTemplateVersion } from "./template.js";
 import type { SqlConnectionPool, SqlTransactionClient } from "../../persistence/sql-executor.js";
 import { randomUUID } from "node:crypto";
 
@@ -104,20 +108,25 @@ export class PostgresLlmControlPlaneRepository implements LlmControlPlaneReposit
   ) {}
 
   async createProvider(provider: Provider): Promise<void> {
-    validateProvider(provider);
+    const normalizedProvider = normalizeProvider(provider);
     await this.pool.query(
       `INSERT INTO llm_providers (id, name, kind, enabled)
 VALUES ($1, $2, $3, $4)`,
-      [provider.id, provider.name, provider.kind, provider.enabled],
+      [
+        normalizedProvider.id,
+        normalizedProvider.name,
+        normalizedProvider.kind,
+        normalizedProvider.enabled,
+      ],
     );
   }
 
   async createEndpoint(endpoint: Endpoint): Promise<void> {
-    validateEndpoint(endpoint);
-    const normalizedEndpoint: Endpoint = {
-      ...endpoint,
-      baseUrl: this.endpointPolicy.normalizeEndpoint(endpoint.baseUrl),
-    };
+    const validatedEndpoint = normalizeEndpoint(endpoint);
+    const normalizedEndpoint = Object.freeze({
+      ...validatedEndpoint,
+      baseUrl: this.endpointPolicy.normalizeEndpoint(validatedEndpoint.baseUrl),
+    });
     await this.pool.query(
       `INSERT INTO llm_endpoints (id, provider_id, base_url, enabled)
 VALUES ($1, $2, $3, $4)`,
@@ -131,42 +140,56 @@ VALUES ($1, $2, $3, $4)`,
   }
 
   async createEncryptedCredential(credential: Credential, ciphertext: CredentialCiphertext): Promise<void> {
-    validateCredential(credential);
+    const normalizedCredential = normalizeCredential(credential);
     assertCiphertext(ciphertext);
+    const normalizedCiphertext = copyCiphertext(ciphertext);
     await this.pool.query(
       `INSERT INTO llm_credentials (id, provider_id, endpoint_id, key_version, enabled, nonce, ciphertext, auth_tag)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
-        credential.id,
-        credential.providerId,
-        credential.endpointId,
-        credential.keyVersion,
-        credential.enabled,
-        ciphertext.nonce,
-        ciphertext.ciphertext,
-        ciphertext.authTag,
+        normalizedCredential.id,
+        normalizedCredential.providerId,
+        normalizedCredential.endpointId,
+        normalizedCredential.keyVersion,
+        normalizedCredential.enabled,
+        normalizedCiphertext.nonce,
+        normalizedCiphertext.ciphertext,
+        normalizedCiphertext.authTag,
       ],
     );
   }
 
   async createModel(model: Model): Promise<void> {
-    validateModel(model);
+    const normalizedModel = normalizeModel(model);
     await this.pool.query(
       `INSERT INTO llm_models (id, provider_id, endpoint_id, name, enabled)
 VALUES ($1, $2, $3, $4, $5)`,
-      [model.id, model.providerId, model.endpointId, model.name, model.enabled],
+      [
+        normalizedModel.id,
+        normalizedModel.providerId,
+        normalizedModel.endpointId,
+        normalizedModel.name,
+        normalizedModel.enabled,
+      ],
     );
   }
 
   async createDraftTemplate(template: PromptTemplateVersion): Promise<void> {
-    validatePromptTemplateVersion(template);
-    if (template.status !== "draft") {
+    const normalizedTemplate = normalizePromptTemplateVersion(template);
+    if (normalizedTemplate.status !== "draft") {
       throw new Error("only draft templates may be created");
     }
     await this.pool.query(
       `INSERT INTO llm_prompt_template_versions (id, key, version, status, content, checksum)
 VALUES ($1, $2, $3, $4, $5, $6)`,
-      [template.id, template.key, template.version, template.status, template.content, template.checksum],
+      [
+        normalizedTemplate.id,
+        normalizedTemplate.key,
+        normalizedTemplate.version,
+        normalizedTemplate.status,
+        normalizedTemplate.content,
+        normalizedTemplate.checksum,
+      ],
     );
   }
 
@@ -174,9 +197,11 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
     mutation: EffectiveRoutingMutation,
     request: EffectiveMutationRequest,
   ): Promise<number> {
+    const normalizedMutation = normalizeEffectiveRoutingMutation(mutation);
+    const normalizedRequest = normalizeEffectiveMutationRequest(request);
     let expectedRevision: number;
     try {
-      expectedRevision = parseSafeRevision(request.expectedRevision, "expectedRevision");
+      expectedRevision = parseSafeRevision(normalizedRequest.expectedRevision, "expectedRevision");
     } catch {
       throw new LlmRoutingRevisionConflictError();
     }
@@ -186,15 +211,15 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
     }
     const auditRecord: AuditRecord = {
       id: randomUUID(),
-      action: request.audit.action,
-      targetId: this.getMutationTargetId(mutation),
+      action: normalizedRequest.audit.action,
+      targetId: this.getMutationTargetId(normalizedMutation),
       revision: nextRevision,
-      actorUserId: request.audit.actorUserId,
-      metadata: normalizeAuditMetadata(request.audit.safeMetadata),
+      actorUserId: normalizedRequest.audit.actorUserId,
+      metadata: normalizedRequest.audit.safeMetadata,
     };
     validateAuditRecord(auditRecord);
     return this.withRoutingTransaction("player_bet", expectedRevision, auditRecord, async (client) => {
-      await this.applyMutation(client, mutation);
+      await this.applyMutation(client, normalizedMutation);
     });
   }
 

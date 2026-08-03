@@ -1,3 +1,11 @@
+import {
+  normalizeAuditMetadata,
+  normalizeEndpoint,
+  normalizeModel,
+  normalizeProvider,
+  normalizeRoute,
+  requireNonEmptyIdentifier,
+} from "./domain.js";
 import type {
   AuditMetadata,
   AuditRecord,
@@ -44,6 +52,22 @@ export interface EffectiveMutationRequest {
   readonly audit: MutationAuditContext;
 }
 
+/** Detaches caller-owned audit input before an asynchronous mutation starts. */
+export function normalizeEffectiveMutationRequest(
+  request: EffectiveMutationRequest,
+): EffectiveMutationRequest {
+  requireNonEmptyIdentifier(request.audit.actorUserId, "audit.actorUserId");
+  requireNonEmptyIdentifier(request.audit.action, "audit.action");
+  return Object.freeze({
+    expectedRevision: request.expectedRevision,
+    audit: Object.freeze({
+      actorUserId: request.audit.actorUserId,
+      action: request.audit.action,
+      safeMetadata: normalizeAuditMetadata(request.audit.safeMetadata),
+    }),
+  });
+}
+
 /**
  * A configuration change that can affect whether an existing route is
  * executable. Repositories apply this as one transaction with its revision,
@@ -56,6 +80,46 @@ export type EffectiveRoutingMutation =
   | { readonly kind: "model.update"; readonly model: Model }
   | { readonly kind: "route.set"; readonly route: Route }
   | { readonly kind: "template.activate"; readonly key: PromptTemplateVersion["key"]; readonly version: number };
+
+/** Validates and detaches every effective command before it crosses an await. */
+export function normalizeEffectiveRoutingMutation(
+  mutation: EffectiveRoutingMutation,
+): EffectiveRoutingMutation {
+  switch (mutation.kind) {
+    case "provider.update":
+      return Object.freeze({ kind: mutation.kind, provider: normalizeProvider(mutation.provider) });
+    case "endpoint.update":
+      return Object.freeze({ kind: mutation.kind, endpoint: normalizeEndpoint(mutation.endpoint) });
+    case "credential.enabled":
+      requireNonEmptyIdentifier(mutation.credentialId, "credentialId");
+      if (typeof mutation.enabled !== "boolean") {
+        throw new Error("credential enabled status is invalid");
+      }
+      return Object.freeze({
+        kind: mutation.kind,
+        credentialId: mutation.credentialId,
+        enabled: mutation.enabled,
+      });
+    case "model.update":
+      return Object.freeze({ kind: mutation.kind, model: normalizeModel(mutation.model) });
+    case "route.set":
+      return Object.freeze({ kind: mutation.kind, route: normalizeRoute(mutation.route) });
+    case "template.activate": {
+      if (
+        mutation.key !== "player_bet" ||
+        !Number.isSafeInteger(mutation.version) ||
+        mutation.version <= 0
+      ) {
+        throw new Error("prompt template activation request is invalid");
+      }
+      return Object.freeze({
+        kind: mutation.kind,
+        key: mutation.key,
+        version: mutation.version,
+      });
+    }
+  }
+}
 
 export interface LlmControlPlaneRepository {
   /** Creation is permitted without a revision only while the resource is unreferenced. */
