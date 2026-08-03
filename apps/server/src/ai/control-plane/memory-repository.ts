@@ -1,4 +1,5 @@
 import {
+  normalizeAuditMetadata,
   requireNonEmptyIdentifier,
   validateAuditRecord,
   validateCredential,
@@ -165,10 +166,17 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
     mutation: EffectiveRoutingMutation,
     request: EffectiveMutationRequest,
   ): Promise<number> {
+    // This copies caller-owned metadata before serializeMutation yields to an
+    // earlier mutation. A queued audit must not observe a later caller change.
+    const normalizedRequest = this.normalizeEffectiveMutationRequest(request);
     return this.serializeMutation(() => {
-      this.requireExpectedRevision(request.expectedRevision);
+      this.requireExpectedRevision(normalizedRequest.expectedRevision);
       const nextRevision = this.currentRevision + 1;
-      const auditRecord = this.createAuditRecord(mutation, request, nextRevision);
+      const auditRecord = this.createAuditRecord(
+        mutation,
+        normalizedRequest,
+        nextRevision,
+      );
       this.applyMutation(mutation);
       this.currentRevision = nextRevision;
       this.storeSnapshot();
@@ -341,6 +349,19 @@ export class MemoryLlmControlPlaneRepository implements LlmControlPlaneRepositor
     };
     validateAuditRecord(auditRecord);
     return cloneAuditRecord(auditRecord);
+  }
+
+  private normalizeEffectiveMutationRequest(
+    request: EffectiveMutationRequest,
+  ): EffectiveMutationRequest {
+    return Object.freeze({
+      expectedRevision: request.expectedRevision,
+      audit: Object.freeze({
+        actorUserId: request.audit.actorUserId,
+        action: request.audit.action,
+        safeMetadata: normalizeAuditMetadata(request.audit.safeMetadata),
+      }),
+    });
   }
 
   private getMutationTargetId(mutation: EffectiveRoutingMutation): string {

@@ -53,6 +53,27 @@ class FakePool {
   async connect(): Promise<FakeClient> { return this.client; }
 }
 
+class GatedFakePool extends FakePool {
+  private releaseConnectionGate!: () => void;
+  private signalConnectionStarted!: () => void;
+  private readonly connectionGate = new Promise<void>((resolve) => {
+    this.releaseConnectionGate = resolve;
+  });
+  readonly connectionStarted = new Promise<void>((resolve) => {
+    this.signalConnectionStarted = resolve;
+  });
+
+  override async connect(): Promise<FakeClient> {
+    this.signalConnectionStarted();
+    await this.connectionGate;
+    return this.client;
+  }
+
+  releaseConnection(): void {
+    this.releaseConnectionGate();
+  }
+}
+
 describe("PostgresLlmControlPlaneRepository", () => {
   it("locks the current scope revision, updates it, snapshots, and audits in one transaction", async () => {
     const pool = new FakePool();
@@ -103,6 +124,31 @@ describe("PostgresLlmControlPlaneRepository", () => {
       { ...mutationRequest, expectedRevision: -1 },
     )).rejects.toBeInstanceOf(LlmRoutingRevisionConflictError);
     expect(pool.client.queries).toEqual([]);
+  });
+
+  it("keeps the validated audit metadata when the caller mutates it during connection await", async () => {
+    const pool = new GatedFakePool();
+    const repository = new PostgresLlmControlPlaneRepository(pool);
+    const mutableSafeMetadata = { changedFields: ["priority"] as unknown[] };
+    const request = {
+      ...mutationRequest,
+      audit: {
+        ...mutationRequest.audit,
+        safeMetadata: mutableSafeMetadata as never,
+      },
+    } satisfies EffectiveMutationRequest;
+
+    const mutationPromise = repository.applyEffectiveMutation({ kind: "route.set", route }, request);
+    await pool.connectionStarted;
+    mutableSafeMetadata.changedFields = ["token"];
+    pool.releaseConnection();
+
+    await mutationPromise;
+
+    const auditInsert = pool.client.queries.find((query) =>
+      query.text.includes("llm_configuration_audit_log"),
+    );
+    expect(auditInsert?.values[5]).toBe(JSON.stringify({ changedFields: ["priority"] }));
   });
 
   it("decodes audit BIGINT strings only when they are safe integers", async () => {

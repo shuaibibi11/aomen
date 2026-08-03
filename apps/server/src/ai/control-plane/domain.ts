@@ -209,6 +209,13 @@ export function validateAuditRecord(auditRecord: AuditRecord): AuditRecord {
   if (!Number.isSafeInteger(auditRecord.revision) || auditRecord.revision < 0) {
     throw new Error("audit.revision must be a non-negative safe integer");
   }
+  if (
+    typeof auditRecord.metadata !== "object" ||
+    auditRecord.metadata === null ||
+    Array.isArray(auditRecord.metadata)
+  ) {
+    throw new Error("audit metadata is invalid");
+  }
 
   for (const [metadataKey, metadataValue] of Object.entries(auditRecord.metadata)) {
     if (
@@ -232,4 +239,32 @@ export function validateAuditRecord(auditRecord: AuditRecord): AuditRecord {
     }
   }
   return auditRecord;
+}
+
+/** Validates caller metadata, then returns a detached deeply immutable copy. */
+export function normalizeAuditMetadata(metadata: AuditMetadata): AuditMetadata {
+  validateAuditRecord({
+    id: "audit-validation",
+    action: "audit.validation",
+    targetId: "audit-validation",
+    revision: 0,
+    actorUserId: "audit-validation",
+    metadata,
+  });
+
+  const normalizedMetadata: {
+    changedFields?: readonly string[];
+    reasonCode?: string;
+    sourceRevision?: number;
+  } = {};
+  if (metadata.changedFields !== undefined) {
+    normalizedMetadata.changedFields = Object.freeze([...metadata.changedFields]);
+  }
+  if (metadata.reasonCode !== undefined) {
+    normalizedMetadata.reasonCode = metadata.reasonCode;
+  }
+  if (metadata.sourceRevision !== undefined) {
+    normalizedMetadata.sourceRevision = metadata.sourceRevision;
+  }
+  return Object.freeze(normalizedMetadata);
 }

@@ -1,5 +1,6 @@
 import {
   requireNonEmptyIdentifier,
+  normalizeAuditMetadata,
   validateAuditRecord,
   validateCredential,
   validateEndpoint,
@@ -189,7 +190,7 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
       targetId: this.getMutationTargetId(mutation),
       revision: nextRevision,
       actorUserId: request.audit.actorUserId,
-      metadata: request.audit.safeMetadata,
+      metadata: normalizeAuditMetadata(request.audit.safeMetadata),
     };
     validateAuditRecord(auditRecord);
     return this.withRoutingTransaction("player_bet", expectedRevision, auditRecord, async (client) => {

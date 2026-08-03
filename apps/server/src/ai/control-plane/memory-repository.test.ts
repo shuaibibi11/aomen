@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MemoryLlmControlPlaneRepository } from "./memory-repository.js";
 import type { Endpoint, Model, Provider, Route } from "./domain.js";
 import { calculatePromptTemplateChecksum } from "./template.js";
+import type { EffectiveMutationRequest } from "./repository.js";
 import { LlmControlPlaneService } from "./service.js";
 
 const provider: Provider = { id: "provider-1", name: "OpenAI", kind: "openai_compatible", enabled: true };
@@ -86,6 +87,29 @@ describe("MemoryLlmControlPlaneRepository", () => {
         },
       },
     )).rejects.toThrow();
+  });
+
+  it("keeps the validated audit metadata when the caller mutates it during serialization await", async () => {
+    const repository = new MemoryLlmControlPlaneRepository();
+    const service = new LlmControlPlaneService(repository);
+    await seed(service);
+    const mutableSafeMetadata = { changedFields: ["priority"] as unknown[] };
+    const request = {
+      expectedRevision: 0,
+      audit: {
+        actorUserId: "operator-1",
+        action: "route.created",
+        safeMetadata: mutableSafeMetadata as never,
+      },
+    } satisfies EffectiveMutationRequest;
+
+    const mutationPromise = repository.applyEffectiveMutation({ kind: "route.set", route }, request);
+    mutableSafeMetadata.changedFields = ["token"];
+    await mutationPromise;
+
+    await expect(repository.listAudit()).resolves.toEqual([
+      expect.objectContaining({ metadata: { changedFields: ["priority"] } }),
+    ]);
   });
 
   it("activates one immutable template per revision and preserves old snapshots", async () => {
